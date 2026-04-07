@@ -10,39 +10,39 @@
                    flex-direction: column; padding: 10px;">
 
             <!-- ── 아바타 퀵셀렉트 ── -->
-            <ui:Label text="아바타 선택"
+            <ui:Label text="Avatar"
                 style="color: rgb(150,150,150); font-size: 10px; margin-bottom: 4px;" />
             <ui:VisualElement name="avatar-selector"
                 style="flex-direction: row; flex-wrap: wrap; margin-bottom: 10px;">
-                <ui:Button name="avatar-card-manuka"  text="マヌカ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-moe"     text="萌"      style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-shinano" text="シナノ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-shio"    text="シオ"    style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-mao"     text="マオ"    style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-lumina"  text="ルミナ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
-                <ui:Button name="avatar-card-shinra"  text="シンラ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-manuka"  text="Manuka"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-moe"     text="Moe"     style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shinano" text="Shinano" style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shio"    text="Sio"     style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-mao"     text="Mao"     style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-lumina"  text="Lumina"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shinra"  text="Shinra"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
             </ui:VisualElement>
 
             <!-- 구분선 -->
             <ui:VisualElement style="height: 1px; background-color: rgb(70,70,70); margin-bottom: 10px;" />
 
             <!-- ── 임포트 버튼 그룹 ── -->
-            <ui:Label text="임포트"
+            <ui:Label text="Import"
                 style="color: rgb(150,150,150); font-size: 10px; margin-bottom: 6px;" />
 
-            <ui:Button name="import-avatar-btn" text="아바타 임포트"
+            <ui:Button name="import-avatar-btn" text="Import Avatar"
                 style="height: 32px; margin-bottom: 4px; font-size: 12px;
                        background-color: rgb(50, 100, 200);" />
 
-            <ui:Button name="import-clothing-btn" text="의상 임포트 (메시 + 머티리얼)"
+            <ui:Button name="import-clothing-btn" text="Import Clothing (Mesh + Material)"
                 style="height: 32px; margin-bottom: 4px; font-size: 12px;
                        background-color: rgb(40, 130, 80);" />
 
-            <ui:Button name="import-clothing-mat-btn" text="의상 머티리얼만 임포트"
+            <ui:Button name="import-clothing-mat-btn" text="Import Material Only"
                 style="height: 28px; margin-bottom: 4px; font-size: 11px;
                        background-color: rgb(60, 100, 60);" />
 
-            <ui:Button name="import-hair-btn" text="헤어 임포트"
+            <ui:Button name="import-hair-btn" text="Import Hair"
                 style="height: 32px; margin-bottom: 10px; font-size: 12px;
                        background-color: rgb(110, 60, 160);" />
 
@@ -50,16 +50,16 @@
             <ui:VisualElement style="height: 1px; background-color: rgb(70,70,70); margin-bottom: 8px;" />
 
             <!-- ── 상태 메시지 ── -->
-            <ui:Label name="parse-status" text="파일을 선택하세요"
+            <ui:Label name="parse-status" text="Select a file to import"
                 style="font-size: 11px; color: rgb(160,200,160);
                        margin-bottom: 8px; white-space: normal;" />
 
             <!-- ── 탭 버튼 ── -->
             <ui:VisualElement name="tab-buttons"
                 style="flex-direction: row; margin-bottom: 6px;">
-                <ui:Button name="tab-btn-layer"    text="레이어"   style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
-                <ui:Button name="tab-btn-mesh"     text="메쉬"     style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
-                <ui:Button name="tab-btn-material" text="머티리얼" style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+                <ui:Button name="tab-btn-layer"    text="Layers"   style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+                <ui:Button name="tab-btn-mesh"     text="Mesh"     style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+                <ui:Button name="tab-btn-material" text="Material" style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
             </ui:VisualElement>
 
             <!-- ── 탭 콘텐츠 ── -->
@@ -81,7 +81,7 @@
             </ui:VisualElement>
 
             <!-- ── 하단 빌드 버튼 ── -->
-            <ui:Button name="build-btn" text="빌드 / 익스포트"
+            <ui:Button name="build-btn" text="Build / Export"
                 style="height: 36px; margin-top: 8px; font-size: 12px;
                        background-color: rgb(80, 160, 80);" />
 

@@ -54,25 +54,106 @@ namespace VirtualDresser.Runtime
         private static Shader _shaderLilToon;
         private static Shader _shaderLilToonCutout;
         private static Shader _shaderLilToonTransparent;
+        private static bool   _shaderSearchDone;
+
+        /// <summary>
+        /// lilToon 셰이더 버전별 이름 변형을 순차 탐색.
+        /// v1.x: "lilToon", "Hidden/lilToonCutout", "Hidden/lilToonTransparent"
+        /// v2.x+: "lilToon/lilToon", "lilToon/lilToon Cutout" etc.
+        /// </summary>
+        private static void EnsureShaders()
+        {
+            if (_shaderSearchDone) return;
+            _shaderSearchDone = true;
+
+            _shaderLilToon =
+                Shader.Find("lilToon") ??
+                Shader.Find("lilToon/lilToon") ??
+                Shader.Find("_lil/lilToon");
+
+            _shaderLilToonCutout =
+                Shader.Find("Hidden/lilToonCutout") ??
+                Shader.Find("lilToon/lilToon Cutout") ??
+                Shader.Find("_lil/lilToon Cutout") ??
+                _shaderLilToon;
+
+            _shaderLilToonTransparent =
+                Shader.Find("Hidden/lilToonTransparent") ??
+                Shader.Find("lilToon/lilToon Transparent") ??
+                Shader.Find("_lil/lilToon Transparent") ??
+                _shaderLilToon;
+
+            if (_shaderLilToon == null)
+                Debug.LogWarning("[MaterialManager] lilToon 셰이더를 찾을 수 없음. lilToon 패키지가 임포트되었는지 확인하세요.");
+            else
+                Debug.Log($"[MaterialManager] lilToon 셰이더 탐지: {_shaderLilToon.name}");
+        }
 
         private static Shader GetLilToonShader(string meshName)
         {
-            _shaderLilToon            ??= Shader.Find("lilToon");
-            _shaderLilToonCutout      ??= Shader.Find("Hidden/lilToonCutout");
-            _shaderLilToonTransparent ??= Shader.Find("Hidden/lilToonTransparent");
-
+            EnsureShaders();
             var lower = meshName.ToLowerInvariant();
 
-            // 헤어: alpha cutout
+            // 헤어/속눈썹: alpha cutout
             if (lower.Contains("hair") || lower.Contains("wig") || lower.Contains("kami")
                 || lower.Contains("eyelash") || lower.Contains("lash"))
-                return _shaderLilToonCutout ?? _shaderLilToon;
+                return _shaderLilToonCutout;
 
-            // 눈: transparent
+            // 눈/아이리스/동공: transparent
             if (lower.Contains("eye") || lower.Contains("iris") || lower.Contains("pupil"))
-                return _shaderLilToonTransparent ?? _shaderLilToon;
+                return _shaderLilToonTransparent;
 
             return _shaderLilToon;
+        }
+
+        /// <summary>
+        /// 셰이더 교체 후 lilToon 필수 기본값 초기화.
+        /// _Color 미초기화 시 메시가 검게 렌더링되는 문제 방지.
+        /// </summary>
+        private static void InitLilToonDefaults(Material mat, Shader shader)
+        {
+            if (shader == null) return;
+
+            // ─ 기본 색상: 반드시 white (lilToon은 MainTex × _Color 로 최종 색 결정) ─
+            if (mat.HasProperty("_Color"))      mat.SetColor("_Color",      Color.white);
+            if (mat.HasProperty("_MainColor"))  mat.SetColor("_MainColor",  Color.white); // v2+
+            if (mat.HasProperty("_Color2nd"))   mat.SetColor("_Color2nd",   Color.white);
+            if (mat.HasProperty("_Color3rd"))   mat.SetColor("_Color3rd",   Color.white);
+
+            // ─ UV 스케일 기본값 ─
+            if (mat.HasProperty("_MainTex"))
+            {
+                mat.SetTextureScale("_MainTex",  Vector2.one);
+                mat.SetTextureOffset("_MainTex", Vector2.zero);
+            }
+
+            // ─ 최소 조도 (0이면 그림자 영역이 완전 검정) ─
+            if (mat.HasProperty("_LightMinLimit")) mat.SetFloat("_LightMinLimit", 0.05f);
+
+            // ─ 변형별 렌더 설정 ─
+            var sname = shader.name;
+            if (sname.Contains("Cutout") || sname.Contains("cutout"))
+            {
+                if (mat.HasProperty("_Cutoff")) mat.SetFloat("_Cutoff", 0.5f);
+                mat.EnableKeyword("_ALPHATEST_ON");
+                mat.DisableKeyword("_ALPHABLEND_ON");
+                mat.renderQueue = 2450;
+            }
+            else if (sname.Contains("Transparent") || sname.Contains("transparent"))
+            {
+                mat.EnableKeyword("_ALPHABLEND_ON");
+                mat.DisableKeyword("_ALPHATEST_ON");
+                mat.renderQueue = 3000;
+                if (mat.HasProperty("_SrcBlend"))  mat.SetFloat("_SrcBlend",  (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (mat.HasProperty("_DstBlend"))  mat.SetFloat("_DstBlend",  (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                if (mat.HasProperty("_ZWrite"))    mat.SetFloat("_ZWrite", 0f);
+            }
+            else
+            {
+                mat.DisableKeyword("_ALPHATEST_ON");
+                mat.DisableKeyword("_ALPHABLEND_ON");
+                mat.renderQueue = 2000;
+            }
         }
 
         public static async Task ApplyTexturesAsync(GameObject go, ParseResult parseResult)
@@ -102,16 +183,13 @@ namespace VirtualDresser.Runtime
 
                 // ── lilToon 셰이더로 교체 ──
                 var lilShader = GetLilToonShader(smr.name);
-                if (lilShader != null && mat.shader != lilShader)
+                if (lilShader != null)
                 {
-                    mat.shader = lilShader;
-                    // lilToon 기본값: 양면 렌더링 끄기, 알파 클리핑 활성화
-                    if (mat.HasProperty("_Cutoff"))
-                        mat.SetFloat("_Cutoff", 0.5f);
-                }
-                else if (lilShader == null)
-                {
-                    Debug.LogWarning("[MaterialManager] lilToon 셰이더를 찾을 수 없음 — URP/Lit 폴백 사용");
+                    if (mat.shader != lilShader)
+                        mat.shader = lilShader;
+
+                    // ★ 셰이더 교체 후 반드시 기본값 초기화 (_Color 미초기화 시 검정 렌더링)
+                    InitLilToonDefaults(mat, lilShader);
                 }
 
                 // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
