@@ -207,49 +207,91 @@ namespace VirtualDresser.Runtime
         {
             bool applied = false;
 
-            // ── 1. .mat 파싱 결과 우선 ──
-            if (parseResult.MaterialTextureMap.TryGetValue(matchKey, out var matInfo))
+            // ── 1. .mat 파싱 결과 우선 (대소문자 무시 dict) ──
+            var matInfo = FindMatInfo(parseResult.MaterialTextureMap, matchKey);
+            if (matInfo != null)
             {
                 if (matInfo.MainTex != null && textures.TryGetValue(matInfo.MainTex, out var t))
                 { SetMainTex(mat, t); applied = true; }
+                else if (matInfo.MainTex != null)
+                    Debug.LogWarning($"[MatMgr] GUID매핑 성공 but 텍스처 없음: '{matchKey}' → '{matInfo.MainTex}'");
+
                 if (matInfo.BumpMap != null && textures.TryGetValue(matInfo.BumpMap, out var b))
                     mat.SetTexture("_BumpMap", b);
                 if (matInfo.EmissionMap != null && textures.TryGetValue(matInfo.EmissionMap, out var e))
                     mat.SetTexture("_EmissionMap", e);
+
+                if (!applied)
+                    Debug.LogWarning($"[MatMgr] .mat 있으나 텍스처 미적용: '{matchKey}' / MainTex={matInfo.MainTex}");
                 return applied;
             }
 
             // ── 2. 텍스처 파일명 × matchKey 유사도 매칭 ──
+            Debug.Log($"[MatMgr] GUID매핑 없음 → 유사도 매칭: '{matchKey}'  (맵 키 수={parseResult.MaterialTextureMap.Count})");
+
             Texture2D bestMain = null;
             int bestScore = -1;
+            string bestTexName = null;
 
             foreach (var (texName, tex) in textures)
             {
                 var prop = ResolveProperty(texName, matchKey);
-
-                // 노말/이미션/마스크/섀도우는 전용 슬롯에 적용하고 MainTex 후보에서 제외
                 if (prop is "_BumpMap" or "_EmissionMap")
-                {
-                    mat.SetTexture(prop, tex);
-                    continue;
-                }
+                { mat.SetTexture(prop, tex); continue; }
                 if (IsNonDiffuseTexture(texName)) continue;
 
                 var score = SimilarityScore(texName, matchKey);
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestMain  = tex;
-                }
+                if (score > bestScore) { bestScore = score; bestMain = tex; bestTexName = texName; }
             }
 
-            if (bestMain != null)
+            if (bestMain != null && bestScore > 0)
             {
                 SetMainTex(mat, bestMain);
                 applied = true;
+                Debug.Log($"[MatMgr] 유사도 매칭: '{matchKey}' → '{bestTexName}' (점수={bestScore})");
+            }
+            else
+            {
+                Debug.LogWarning($"[MatMgr] 매칭 실패: '{matchKey}' (텍스처 {textures.Count}장 중 점수>{bestScore} 없음)");
+                // ── 진단: 맵 키와 텍스처 목록 출력 ──
+                if (parseResult.MaterialTextureMap.Count > 0)
+                    Debug.Log($"[MatMgr]   .mat 맵 키: {string.Join(", ", parseResult.MaterialTextureMap.Keys.Take(5))}");
+                Debug.Log($"[MatMgr]   텍스처 목록: {string.Join(", ", textures.Keys.Take(8))}");
             }
 
             return applied;
+        }
+
+        /// <summary>
+        /// MaterialTextureMap에서 matchKey를 찾되, 없으면 prefix 제거 후 재시도.
+        /// FBX 머티리얼 이름(TriLib) ≠ .mat 파일명인 경우 대응.
+        /// </summary>
+        private static MaterialTextures FindMatInfo(
+            Dictionary<string, MaterialTextures> map, string matchKey)
+        {
+            if (map.Count == 0) return null;
+
+            // 1) 직접 일치 (dict가 OrdinalIgnoreCase이므로 대소문자 무시)
+            if (map.TryGetValue(matchKey, out var info)) return info;
+
+            // 2) 공통 prefix 제거 후 재시도 (FBX_ / MTL_ / M_ 등)
+            var stripped = StripMaterialSuffix(
+                System.Text.RegularExpressions.Regex.Replace(
+                    matchKey, @"^(FBX_|MTL_|Mat_|M_|mat_)", "",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+            if (!string.IsNullOrEmpty(stripped) && stripped != matchKey
+                && map.TryGetValue(stripped, out info)) return info;
+
+            // 3) map 키 중에 matchKey를 포함하거나 포함되는 것 찾기
+            var matchLower = matchKey.ToLowerInvariant();
+            foreach (var kv in map)
+            {
+                var kLower = kv.Key.ToLowerInvariant();
+                if (kLower.Contains(matchLower) || matchLower.Contains(kLower))
+                    return kv.Value;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -298,21 +340,33 @@ namespace VirtualDresser.Runtime
             return common;
         }
 
-        // 텍스처 파일명에서 흔한 suffix 제거: _d, _col, _albedo, _main, _01 등
+        // 텍스처 파일명: prefix(tex_/t_) + suffix(_d/_col 등) 제거
+        private static readonly System.Text.RegularExpressions.Regex TexPrefixRegex =
+            new(@"^(tex_|t_|texture_)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         private static readonly System.Text.RegularExpressions.Regex TexSuffixRegex =
-            new(@"[_\-](d|col|color|albedo|main|diff|diffuse|base|body|0\d|1\d)$",
+            new(@"[_\-](d|col|color|albedo|main|diff|diffuse|base|0\d|1\d)$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        private static string StripTextureSuffix(string name) =>
-            TexSuffixRegex.Replace(name, "");
+        private static string StripTextureSuffix(string name)
+        {
+            name = TexPrefixRegex.Replace(name, "");
+            return TexSuffixRegex.Replace(name, "");
+        }
 
-        // 머티리얼 이름에서 흔한 suffix 제거: _mat, _material, _m 등
+        // 머티리얼 이름: prefix(FBX_/MTL_/M_) + suffix(_mat) 제거
+        private static readonly System.Text.RegularExpressions.Regex MatPrefixRegex =
+            new(@"^(FBX_|MTL_|Mat_|M_|mat_)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         private static readonly System.Text.RegularExpressions.Regex MatSuffixRegex =
             new(@"[_\-](mat|material|m)$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        private static string StripMaterialSuffix(string name) =>
-            MatSuffixRegex.Replace(name, "");
+        private static string StripMaterialSuffix(string name)
+        {
+            name = MatPrefixRegex.Replace(name, "");
+            return MatSuffixRegex.Replace(name, "");
+        }
 
         // ─── 텍스처 로드 ───
 

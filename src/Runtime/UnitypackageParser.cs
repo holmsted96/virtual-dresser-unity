@@ -36,7 +36,9 @@ namespace VirtualDresser.Runtime
         /// .mat 파싱 결과: 머티리얼 이름 → 텍스처 매핑
         /// 현재 Rust의 material_texture_map과 동일
         /// </summary>
-        public Dictionary<string, MaterialTextures> MaterialTextureMap = new();
+        // ★ OrdinalIgnoreCase: TriLib 머티리얼 이름 대소문자가 .mat 파일명과 다를 수 있음
+        public Dictionary<string, MaterialTextures> MaterialTextureMap =
+            new(StringComparer.OrdinalIgnoreCase);
     }
 
     public class MaterialTextures
