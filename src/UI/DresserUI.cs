@@ -81,6 +81,7 @@ namespace VirtualDresser.UI
         // ─── 앱 상태 ───
         private ParseResult _avatarParse;
         private ParseResult _clothingParse;
+        private ParseResult _hairParse;
         private readonly List<string> _sceneMaterials = new();
         private bool _highQualityMode = false;
         private AvatarConfig _currentAvatarConfig;
@@ -466,7 +467,8 @@ namespace VirtualDresser.UI
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
                 if (go == null) { SetParseStatus("의상 FBX 로드 실패"); return; }
                 go.transform.SetParent(avatarRoot, false);
-                _clothingGo = go;
+                _clothingGo    = go;
+                _clothingParse = result;
 
                 if (avatarRoot != null)
                 {
@@ -505,7 +507,8 @@ namespace VirtualDresser.UI
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
                 if (go == null) { SetParseStatus("헤어 FBX 로드 실패"); return; }
                 go.transform.SetParent(avatarRoot, false);
-                _hairGo = go;
+                _hairGo    = go;
+                _hairParse = result;
 
                 if (avatarRoot != null)
                 {
@@ -863,18 +866,27 @@ namespace VirtualDresser.UI
 #endif
             if (string.IsNullOrEmpty(outputPath)) return;
 
-            // ── 임시 에셋 폴더 준비 ──
+            // ── 임시 에셋 폴더 준비 (기존 캐시 초기화) ──
             var inputPath = Path.Combine(Path.GetTempPath(), "vd-warudo-input", avatarName);
+            if (Directory.Exists(inputPath)) Directory.Delete(inputPath, recursive: true);
             Directory.CreateDirectory(inputPath);
 
             // 아바타 에셋 복사
             CopyParseAssets(_avatarParse, inputPath);
             if (_clothingParse != null)
                 CopyParseAssets(_clothingParse, Path.Combine(inputPath, "clothing"));
+            if (_hairParse != null)
+                CopyParseAssets(_hairParse, Path.Combine(inputPath, "hair"));
 
             // ── 헤들리스 빌드 실행 ──
-            SetParseStatus($"⏳ .warudo 빌드 중... (1~3분 소요)");
-            Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}");
+            // 첫 실행 시 Unity 스크립트 컴파일로 3~5분 소요됨
+            bool isFirstRun = !Directory.Exists(
+                Path.Combine(WarudoHeadlessBuilder.ConverterProjectPath, "Library"));
+            var waitMsg = isFirstRun
+                ? "⏳ .warudo 빌드 중...\n(첫 실행 시 Unity 컴파일로 3~5분 소요됩니다)"
+                : "⏳ .warudo 빌드 중... (1~2분 소요)";
+            SetParseStatus(waitMsg);
+            Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}  (firstRun={isFirstRun})");
 
             WarudoHeadlessBuilder.BuildWarudo(
                 inputPath, outputPath, avatarName,
@@ -885,12 +897,12 @@ namespace VirtualDresser.UI
                     {
                         if (error == null)
                         {
-                            SetParseStatus($"✅ .warudo 생성 완료!\n{Path.GetFileName(outputPath)}");
+                            SetParseStatus($"✅ .warudo 생성 완료!\n저장 위치: {outputPath}");
                             Debug.Log($"[DresserUI] 빌드 완료: {result}");
                         }
                         else
                         {
-                            SetParseStatus($"❌ 빌드 실패: {error}");
+                            SetParseStatus($"❌ 빌드 실패\n{error}");
                             Debug.LogError($"[DresserUI] 빌드 실패: {error}");
                         }
                     });
@@ -1056,9 +1068,17 @@ namespace VirtualDresser.UI
 
     public static class WarudoHeadlessBuilder
     {
-        // vd-warudo-converter 프로젝트 경로 (main app 옆에 위치)
-        private static string ConverterProjectPath =>
-            Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "vd-warudo-converter"));
+        // vd-warudo-converter 프로젝트 경로
+        // Standalone 빌드: <exe폴더>/vd-warudo-converter/
+        //   Application.dataPath = <exe폴더>/VirtualDresser_Data
+        //   → ../vd-warudo-converter = <exe폴더>/vd-warudo-converter  ✓
+        // Editor: <project>/Assets → ../../vd-warudo-converter 이지만 Editor에서는 직접 빌드 테스트용
+        public static string ConverterProjectPath =>
+#if UNITY_EDITOR
+            Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "virtual-dresser-unity", "vd-warudo-converter"));
+#else
+            Path.GetFullPath(Path.Combine(Application.dataPath, "..", "vd-warudo-converter"));
+#endif
 
         /// <summary>
         /// 헤들리스 Unity 2021.3으로 .warudo 파일 빌드.
