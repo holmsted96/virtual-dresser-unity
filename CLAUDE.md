@@ -41,16 +41,19 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 ## 완료된 작업
 
 ### Phase 1 — 파싱 + FBX 로드 ✅
-- `UnitypackageParser.cs` — tar.gz 스트리밍 파싱 (OOM 방지), .mat 2패스 파싱 (GUID 역매핑)
+- `UnitypackageParser.cs` — tar.gz 스트리밍 파싱 (OOM 방지)
+- `.mat` 2패스 파싱: GUID 역매핑으로 정확한 텍스처-머티리얼 연결
+  - ⚠️ YAML 리스트 항목 형식 `- _MainTex:` → `TrimStart('-', ' ')` 로 처리 (단순 StartsWith 안 됨)
+- `MaterialTextureMap` — OrdinalIgnoreCase 딕셔너리 (TriLib 머티리얼명 대소문자 불일치 대응)
 - `WindowsFilePicker.cs` — Editor: EditorUtility, Standalone: P/Invoke GetOpenFileName
 - `FbxConverter.cs` — TriLib 2 기반 FBX 런타임 로드 (AnimationType.Legacy)
 - `MeshCombiner.cs` — 의상 골격 바인딩 (bindposes 불변 원칙)
 
 ### Phase 2 — UI + 뷰포트 ✅
-- `DresserUI.cs` — UI Toolkit 기반 메인 UI
+- `DresserUI.cs` — UI Toolkit 기반 메인 UI (Unity 2021.3 런타임)
 - `dresser.uxml` — 레이아웃 (오른쪽 패널 300px, 왼쪽 투명 뷰포트), 전체 영문 텍스트
+  - viewer-area에 Reset View 버튼 포함 (absolute 포지셔닝)
 - 아바타/의상/헤어/머티리얼 분리 임포트 버튼 4종
-- 레이어별 메시 패널 (아바타/의상/헤어 필터)
 - `CameraController.cs` — 마우스 오빗/줌/패닝
 - `SceneSetup.cs` — Editor 메뉴로 씬 자동 구성 (VirtualDresser > Setup Scene)
 
@@ -60,19 +63,21 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - 셰이더 교체 후 `_Color=white` 초기화 (미설정 시 검정 렌더링 방지)
 - Cutout/Transparent 변형 keyword + renderQueue 자동 설정
 - `_LightMinLimit=0.05` 기본값 (그림자 완전 검정 방지)
-- MainTex 매칭: 머티리얼 이름 유사도 점수 기반
-- 노말맵/마스크 MainTex 후보 제외 로직
+- 텍스처 매칭: GUID 직접 매핑 우선, 실패 시 유사도 점수 fallback
+  - `FindMatInfo()` — 3단계 fallback: 직접일치 → prefix제거 → 부분문자열 포함
+  - `SimilarityScore()` — tex_/t_ prefix, _d/_col/_mat suffix 제거 후 비교
+  - 매칭 실패 시 콘솔에 상세 진단 로그 출력
 
 ### Phase 4 — 익스포트 ✅
 - `WarudoBuildScript.cs` — vd-warudo-converter 헤들리스 빌드 스크립트
   - Warudo SDK 있으면 UMod 빌더 사용, 없으면 AssetBundle 폴백
 - `WarudoHeadlessBuilder` (DresserUI 내부) — 헤들리스 Unity 실행 로직
-  - ConverterProjectPath: Standalone = `../vd-warudo-converter`, Editor = git repo 경로
-  - 첫 실행 감지 (Library 폴더 유무) → 대기 안내 메시지
+  - ConverterProjectPath: Standalone = `../vd-warudo-converter`, Editor = git repo 경로 (`#if UNITY_EDITOR`)
+  - 첫 실행 감지 (Library 폴더 유무) → 대기 안내 메시지 (3~5분)
 - `deploy.ps1` — 빌드 + converter 배포 + 워밍업 자동화 (4단계)
 - `UnitySetupManager.cs` — 앱 최초 실행 시 Unity Hub + 2021.3.45f2 자동 설치
 - `UnityMainThreadDispatcher.cs` — 백그라운드 → 메인 스레드 디스패치
-- Warudo SDK `com.warudo.mod-tool 0.14.3.10` — vd-warudo-converter manifest에 포함
+- Warudo SDK `com.warudo.mod-tool 0.14.3.10` — vd-warudo-converter manifest에 포함 (자동 다운로드)
 
 ### Sprint B — boneMap 통합 ✅
 - `MeshCombiner.cs` — AvatarConfig boneMap alias 역방향 맵 구축
@@ -81,37 +86,41 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - `GetBodyMeshHint()` — 단일 바디 메시 감지 → UI 힌트 반환
 
 ### Sprint C — lilToon 셰이더 ✅
-- 위 Phase 3에 통합 완료
+- Phase 3에 통합 완료
 
 ### Sprint D — Windows Standalone 빌드 ✅
 - `BuildScript.cs` — VirtualDresser > Build Windows 메뉴 (`c:/vd/build/` 출력)
 - dresser.uxml 전체 영문화 (Standalone에서 CJK 폰트 없어 한국어/일본어 미표시 문제 해결)
 - DragEnterEvent 등 Editor 전용 이벤트 `#if UNITY_EDITOR` 처리
 
+### Sprint E — 메시 편집 기능 ✅
+- 메시 패널 각 항목: `[Hide/Show]` `[Del]` `[...]` 버튼 (영문, Standalone 호환)
+- `[...]` 클릭 시 트랜스폼 인라인 편집 패널 토글
+  - Pos / Rot / Sca 각 X/Y/Z 수치 입력 (TextField + float.TryParse, InvariantCulture)
+  - X(빨강) / Y(초록) / Z(파랑) 색상 구분
+  - Reset Transform 버튼
+- ⚠️ `FloatField` 는 Unity 2021.3 런타임에 없음 → `TextField` + `float.TryParse` 사용
+- ⚠️ `unityTextOverflow` 는 Unity 2022.2+ 전용 → 제거
+
 ## 남은 작업
 
-### 즉시 해야 할 것 — e2e 테스트
+### 즉시 — e2e 테스트
 1. `deploy.ps1` 실행 → `c:/vd/build/` 생성 확인
 2. `VirtualDresser.exe` 실행 → 아바타 임포트 → 의상 임포트
-3. "Build / Export" 버튼 → `.warudo` 파일 Desktop에 생성 확인
+3. "Build / Export" 버튼 → `.warudo` Desktop 생성 확인
 4. Warudo에서 `.warudo` 로드 테스트
 
-### Sprint E — 메시 편집 기능 (다음 스프린트)
-- 개별 메시 **삭제** 버튼 (레이어 패널)
-- 메시 **표시/숨김** 토글 (SkinnedMeshRenderer.enabled)
-- 메시 **이동/회전/스케일** 조정 (Transform 직접 수정, 의상 미세 위치 보정용)
-- ⚠️ 스킨드 메시 특성상 큰 이동은 본 계층과 어긋날 수 있음 → 미세 보정 용도로 제한
-- 구현 위치: `DresserUI.cs` 메시 패널에 수치 입력 필드 추가
+### 모에 텍스처 매칭 진단 (컴파일 후 테스트 필요)
+- 콘솔에서 `[MatMgr]` 로그로 실패 원인 확인
+- "GUID매핑 없음 → 유사도 매칭: 'XXX'" 로그가 나오면 matchKey와 맵 키 비교해서 추가 대응
 
 ### 개선 TODO (MVP 이후)
-- **텍스처/머티리얼 매칭 정확도 향상** — 루미나 등 일부 아바타에서 깨짐 발생
-  - 개선 방향: 파일명 유사도 fallback 강화 / 사용자 수동 매칭 UI
 - **UI 전반 고급화** — 레이아웃, 컬러, 아이콘, 전체적인 완성도
 - **카메라 UX 개선** — 오빗 속도, 줌 감도, 기본 시점 조정
 - **Import 처리 속도 개선** — 프로그레스바, 병렬처리 검토
-- **시나노 발 클리핑** — 단일 바디 메시라 자동 숨김 불가 → Sprint E 메시 편집으로 해결 예정
+- **시나노 발 클리핑** — 단일 바디 메시라 자동 숨김 불가 → 메시 편집(Sprint E)으로 사용자가 직접 조정
 
-## 중요 기술 결정
+## 중요 기술 결정 & 트러블슈팅
 
 ### FBX 로더: TriLib 2 채택 이유
 - FBX2glTF 서브프로세스 크래시(0xC0000409) 해결 불가
@@ -123,13 +132,22 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - BuildPipeline = Editor 전용 → 런타임 직접 생성 불가
 - 해결: Unity 2021.3 헤들리스로 별도 변환 프로젝트(vd-warudo-converter) 실행
 - Warudo SDK 있으면 UMod 정식 빌드, 없으면 AssetBundle 폴백 (Warudo 호환)
-- 배포 구조: exe 옆에 `vd-warudo-converter/` 폴더 포함 (`deploy.ps1`이 복사)
+- 배포 구조: exe 옆에 `vd-warudo-converter/` 포함 (`deploy.ps1`이 자동 복사)
+- 첫 실행 시 SDK 다운로드 + 컴파일 3~8분 소요 (Library 폴더 없으면 자동 안내)
 
 ### lilToon 렌더링
 - 셰이더 교체 후 `_Color` 반드시 white 초기화 (미설정 = 검정 렌더링)
 - 셰이더 이름 다중 탐색: `"lilToon"` → `"lilToon/lilToon"` → `"_lil/lilToon"`
 - Cutout: `_ALPHATEST_ON` keyword + renderQueue=2450
 - Transparent: `_ALPHABLEND_ON` + SrcBlend/DstBlend + renderQueue=3000
+
+### 텍스처 매칭 구조
+1. `.mat` YAML에서 GUID 추출 → guidToPathname으로 실제 파일명 역매핑
+   - YAML 구조: `- _MainTex:` → `TrimStart('-', ' ')` 후 StartsWith 검사 필수
+2. `MaterialTextureMap[matName]` 직접 조회 (OrdinalIgnoreCase)
+3. 실패 시 `FindMatInfo()` — prefix(FBX_/MTL_) 제거 → 부분문자열 포함 순 fallback
+4. 최종 실패 시 `SimilarityScore()` 유사도 매칭 (prefix/suffix 제거 후 토큰 비교)
+- 매칭 실패 시 콘솔 `[MatMgr]` 로그로 맵 키/텍스처 목록 출력
 
 ### 의상 바인딩 원칙
 - `smr.bones` 교체만 수행
@@ -145,6 +163,12 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - UIDocument가 3D씬을 덮는 문제
 - 해결: `viewer-area`와 `root` 의 `background-color` 제거 (투명)
 - PanelSettings: `clearDepthStencil=false`, `colorClearValue=transparent`
+
+### Unity 2021.3 런타임 UI Toolkit 제약
+- `FloatField` 없음 → `TextField` + `float.TryParse(InvariantCulture)` 로 대체
+- `unityTextOverflow` 없음 (2022.2+ 전용) → 생략
+- DragEnterEvent / DragLeaveEvent / DragPerformEvent 없음 → `#if UNITY_EDITOR` 처리
+- Standalone 기본 폰트에 CJK 글리프 없음 → UI 텍스트 전체 영문화 필수
 
 ### Standalone 텍스트 렌더링
 - Unity Standalone 기본 폰트에 CJK 글리프 없음 → 한국어/일본어 버튼 텍스트 미표시
@@ -230,6 +254,6 @@ cp "c:/vd/virtual-dresser-app/Dresser/Packages/manifest.json" "$REPO/Packages/ma
 ### vd-warudo-converter
 | 패키지 | 버전 | 설치 방법 |
 |--------|------|-----------|
-| Warudo Mod Tool | 0.14.3.10 | manifest.json (git URL, 자동) |
+| Warudo Mod Tool | 0.14.3.10 | manifest.json (git URL, 자동 다운로드) |
 | Newtonsoft.Json | 3.2.1 | manifest.json |
 | URP | 12.1.13 | manifest.json |
