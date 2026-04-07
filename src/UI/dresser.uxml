@@ -3,12 +3,39 @@
 
         <!-- 왼쪽: 3D 뷰어 영역 — 투명하게 유지 -->
         <ui:VisualElement name="viewer-area" style="flex: 1; position: relative;">
-            <ui:Button name="reset-view-btn" text="Reset View"
+
+            <!-- 좌하단 버튼 그룹 -->
+            <ui:VisualElement name="viewer-overlay-btns"
                 style="position: absolute; bottom: 16px; left: 16px;
-                       width: 100px; height: 30px; font-size: 11px;
-                       background-color: rgba(30, 30, 30, 200);
-                       color: rgb(200, 200, 200);
-                       border-color: rgb(80, 80, 80); border-width: 1px;" />
+                       flex-direction: column; align-items: flex-start;">
+
+                <!-- 포즈 버튼 행 -->
+                <ui:VisualElement style="flex-direction: row; margin-bottom: 6px;">
+                    <ui:Button name="pose-tpose-btn" text="T-Pose"
+                        style="width: 62px; height: 26px; font-size: 10px; margin-right: 4px;
+                               background-color: rgba(30, 30, 30, 210);
+                               color: rgb(200, 200, 200);
+                               border-color: rgb(80, 80, 80); border-width: 1px;" />
+                    <ui:Button name="pose-apose-btn" text="A-Pose"
+                        style="width: 62px; height: 26px; font-size: 10px; margin-right: 4px;
+                               background-color: rgba(30, 30, 30, 210);
+                               color: rgb(200, 200, 200);
+                               border-color: rgb(80, 80, 80); border-width: 1px;" />
+                    <ui:Button name="pose-armsup-btn" text="Arms Up"
+                        style="width: 62px; height: 26px; font-size: 10px;
+                               background-color: rgba(30, 30, 30, 210);
+                               color: rgb(200, 200, 200);
+                               border-color: rgb(80, 80, 80); border-width: 1px;" />
+                </ui:VisualElement>
+
+                <!-- 카메라 리셋 -->
+                <ui:Button name="reset-view-btn" text="Reset View"
+                    style="width: 100px; height: 26px; font-size: 10px;
+                           background-color: rgba(30, 30, 30, 210);
+                           color: rgb(160, 160, 160);
+                           border-color: rgb(60, 60, 60); border-width: 1px;" />
+            </ui:VisualElement>
+
         </ui:VisualElement>
 
         <!-- 오른쪽: 컨트롤 패널 -->

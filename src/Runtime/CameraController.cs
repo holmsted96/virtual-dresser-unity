@@ -27,6 +27,10 @@ namespace VirtualDresser.Runtime
         private float _distance = 2.5f;
         private bool  _uiBlocking = false; // UI 위에서 클릭 시 무시
 
+        // ResetView용 저장 상태
+        private Bounds _savedBounds;
+        private bool   _hasSavedBounds = false;
+
         private void Start()
         {
             // 현재 카메라 위치에서 초기 오빗 파라미터 역산
@@ -70,11 +74,23 @@ namespace VirtualDresser.Runtime
         /// </summary>
         public void FocusOnBounds(Bounds bounds)
         {
+            _savedBounds    = bounds;
+            _hasSavedBounds = true;
+
             Target    = bounds.center;
             _distance = bounds.size.magnitude * 1.2f;
             _distance = Mathf.Clamp(_distance, minDistance, maxDistance);
             _pitch    = 10f;
             _yaw      = 0f;
+        }
+
+        /// <summary>
+        /// 마지막 FocusOnBounds 상태(아바타 정면)로 카메라를 초기화.
+        /// </summary>
+        public void ResetView()
+        {
+            if (_hasSavedBounds)
+                FocusOnBounds(_savedBounds);
         }
     }
 }

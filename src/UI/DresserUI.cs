@@ -1119,9 +1119,17 @@ namespace VirtualDresser.UI
         private void SelectAvatar(string avatarId)
         {
             Debug.Log($"[DresserUI] 아바타 선택: {avatarId}");
-            var config = AvatarConfigLoader.Get(avatarId);
-            if (config != null)
-                Debug.Log($"  → {config.displayNameKo} 설정 로드됨");
+            _currentAvatarConfig = AvatarConfigLoader.Get(avatarId);
+            if (_currentAvatarConfig != null)
+                Debug.Log($"  → {_currentAvatarConfig.displayNameKo} 설정 로드됨");
+
+            // 이미 씬에 로드된 아바타가 있으면 PoseController 재연결
+            if (_avatarGo != null)
+            {
+                if (_poseController == null)
+                    _poseController = gameObject.AddComponent<PoseController>();
+                _poseController.SetAvatar(_avatarGo);
+            }
         }
 
         // ─── 유틸리티 ───

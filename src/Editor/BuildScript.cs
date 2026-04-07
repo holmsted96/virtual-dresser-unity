@@ -30,6 +30,12 @@ namespace VirtualDresser.Editor
             if (foundScenes.Length > 0)
                 scenes = new[] { AssetDatabase.GUIDToAssetPath(foundScenes[0]) };
 
+            // 창 모드 설정
+            PlayerSettings.fullScreenMode        = FullScreenMode.Windowed;
+            PlayerSettings.defaultScreenWidth    = 1280;
+            PlayerSettings.defaultScreenHeight   = 800;
+            PlayerSettings.resizableWindow       = true;
+
             var options = new BuildPlayerOptions
             {
                 scenes            = scenes,
