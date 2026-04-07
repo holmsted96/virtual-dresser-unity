@@ -85,6 +85,7 @@ namespace VirtualDresser.UI
         private readonly List<string> _sceneMaterials = new();
         private bool _highQualityMode = false;
         private AvatarConfig _currentAvatarConfig;
+        private PoseController _poseController;
 
         // ─── 레이어별 GameObject 참조 (머티리얼 격리에 사용) ───
         private GameObject _avatarGo;
@@ -288,6 +289,14 @@ namespace VirtualDresser.UI
                     cam?.GetComponent<VirtualDresser.Runtime.CameraController>()?.ResetView();
                 });
 
+            // 포즈 버튼
+            _root.Q<Button>("pose-tpose-btn")
+                ?.RegisterCallback<ClickEvent>(_ => _poseController?.ApplyTPose());
+            _root.Q<Button>("pose-apose-btn")
+                ?.RegisterCallback<ClickEvent>(_ => _poseController?.ApplyAPose());
+            _root.Q<Button>("pose-armsup-btn")
+                ?.RegisterCallback<ClickEvent>(_ => _poseController?.ApplyArmsUp());
+
             // 빌드 버튼
             _root.Q<Button>("build-btn")
                 ?.RegisterCallback<ClickEvent>(_ => OnBuildButtonClicked());
@@ -457,6 +466,12 @@ namespace VirtualDresser.UI
                 await MaterialManager.ApplyTexturesAsync(go, result);
                 RegisterMeshGroup("avatar", displayName, go);
                 FocusCameraOnAvatar(go);
+
+                // 포즈 컨트롤러 초기화
+                if (_poseController == null)
+                    _poseController = gameObject.AddComponent<PoseController>();
+                _poseController.SetAvatar(go);
+
                 SetParseStatus($"아바타 로드 완료: {displayName}");
             }
             catch (Exception e)
@@ -751,7 +766,7 @@ namespace VirtualDresser.UI
             nameLabel.style.fontSize           = 11;
             nameLabel.style.overflow           = Overflow.Hidden;
             nameLabel.style.whiteSpace         = WhiteSpace.NoWrap;
-            nameLabel.style.unityTextOverflow  = TextOverflow.Ellipsis;
+            // unityTextOverflow: Unity 2022.2+ 전용 — 2021.3에서는 생략
             nameLabel.style.color              = entry.IsVisible
                 ? new StyleColor(Color.white)
                 : new StyleColor(new Color(0.4f, 0.4f, 0.4f));
@@ -867,10 +882,16 @@ namespace VirtualDresser.UI
                 axisLbl.style.color       = new StyleColor(axisColors[i]);
                 axisLbl.style.marginRight = 1;
 
-                var field = new FloatField { value = axisValues[i] };
+                // FloatField는 Unity 2021.3 런타임에 없으므로 TextField + 파싱으로 대체
+                var field = new TextField { value = axisValues[i].ToString("F3") };
                 field.style.width    = 52;
                 field.style.fontSize = 10;
-                field.RegisterValueChangedCallback(e => onChange(idx, e.newValue));
+                field.RegisterValueChangedCallback(e => {
+                    if (float.TryParse(e.newValue,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var f))
+                        onChange(idx, f);
+                });
 
                 row.Add(axisLbl);
                 row.Add(field);
