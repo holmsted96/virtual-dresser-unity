@@ -1,0 +1,90 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <ui:VisualElement name="root" style="flex-direction: row; width: 100%; height: 100%;">
+
+        <!-- 왼쪽: 3D 뷰어 영역 — 투명하게 유지 -->
+        <ui:VisualElement name="viewer-area" style="flex: 1;" />
+
+        <!-- 오른쪽: 컨트롤 패널 -->
+        <ui:VisualElement name="control-panel"
+            style="width: 300px; background-color: rgb(40, 40, 40);
+                   flex-direction: column; padding: 10px;">
+
+            <!-- ── 아바타 퀵셀렉트 ── -->
+            <ui:Label text="아바타 선택"
+                style="color: rgb(150,150,150); font-size: 10px; margin-bottom: 4px;" />
+            <ui:VisualElement name="avatar-selector"
+                style="flex-direction: row; flex-wrap: wrap; margin-bottom: 10px;">
+                <ui:Button name="avatar-card-manuka"  text="マヌカ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-moe"     text="萌"      style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shinano" text="シナノ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shio"    text="シオ"    style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-mao"     text="マオ"    style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-lumina"  text="ルミナ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+                <ui:Button name="avatar-card-shinra"  text="シンラ"  style="flex: 1; min-width: 55px; height: 24px; margin: 1px; font-size: 10px;" />
+            </ui:VisualElement>
+
+            <!-- 구분선 -->
+            <ui:VisualElement style="height: 1px; background-color: rgb(70,70,70); margin-bottom: 10px;" />
+
+            <!-- ── 임포트 버튼 그룹 ── -->
+            <ui:Label text="임포트"
+                style="color: rgb(150,150,150); font-size: 10px; margin-bottom: 6px;" />
+
+            <ui:Button name="import-avatar-btn" text="아바타 임포트"
+                style="height: 32px; margin-bottom: 4px; font-size: 12px;
+                       background-color: rgb(50, 100, 200);" />
+
+            <ui:Button name="import-clothing-btn" text="의상 임포트 (메시 + 머티리얼)"
+                style="height: 32px; margin-bottom: 4px; font-size: 12px;
+                       background-color: rgb(40, 130, 80);" />
+
+            <ui:Button name="import-clothing-mat-btn" text="의상 머티리얼만 임포트"
+                style="height: 28px; margin-bottom: 4px; font-size: 11px;
+                       background-color: rgb(60, 100, 60);" />
+
+            <ui:Button name="import-hair-btn" text="헤어 임포트"
+                style="height: 32px; margin-bottom: 10px; font-size: 12px;
+                       background-color: rgb(110, 60, 160);" />
+
+            <!-- 구분선 -->
+            <ui:VisualElement style="height: 1px; background-color: rgb(70,70,70); margin-bottom: 8px;" />
+
+            <!-- ── 상태 메시지 ── -->
+            <ui:Label name="parse-status" text="파일을 선택하세요"
+                style="font-size: 11px; color: rgb(160,200,160);
+                       margin-bottom: 8px; white-space: normal;" />
+
+            <!-- ── 탭 버튼 ── -->
+            <ui:VisualElement name="tab-buttons"
+                style="flex-direction: row; margin-bottom: 6px;">
+                <ui:Button name="tab-btn-layer"    text="레이어"   style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+                <ui:Button name="tab-btn-mesh"     text="메쉬"     style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+                <ui:Button name="tab-btn-material" text="머티리얼" style="flex: 1; height: 26px; margin: 1px; font-size: 11px;" />
+            </ui:VisualElement>
+
+            <!-- ── 탭 콘텐츠 ── -->
+            <ui:VisualElement name="main-tabs" style="flex: 1; overflow: hidden;">
+
+                <!-- 레이어 탭 -->
+                <ui:VisualElement name="tab-layer" style="flex: 1;">
+                    <ui:VisualElement name="layer-list" style="flex: 1;" />
+                </ui:VisualElement>
+
+                <!-- 메쉬 탭 (기본 숨김) -->
+                <ui:VisualElement name="mesh-panel" style="flex: 1; display: none;" />
+
+                <!-- 머티리얼 탭 (기본 숨김) -->
+                <ui:VisualElement name="material-panel" style="flex: 1; display: none;">
+                    <ui:ListView name="material-list" style="flex: 1;" />
+                </ui:VisualElement>
+
+            </ui:VisualElement>
+
+            <!-- ── 하단 빌드 버튼 ── -->
+            <ui:Button name="build-btn" text="빌드 / 익스포트"
+                style="height: 36px; margin-top: 8px; font-size: 12px;
+                       background-color: rgb(80, 160, 80);" />
+
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

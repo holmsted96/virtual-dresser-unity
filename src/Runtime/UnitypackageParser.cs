@@ -106,93 +106,72 @@ namespace VirtualDresser.Runtime
         }
 
         // ─── .unitypackage 파일 파싱 ───
-        // src-tauri/src/lib.rs parse_unitypackage() 포팅
+        // ★ 단일 패스 디스크 스트리밍: RAM에 에셋 데이터를 올리지 않음
+        //   .unitypackage = tar.gz, 구조: {guid}/pathname, {guid}/asset
         public static async Task<ParseResult> ParseUnitypackageAsync(string packagePath)
         {
             var tempDir = Path.Combine(
-                Path.GetTempPath(),
-                "virtual-dresser",
-                Path.GetRandomFileName()
-            );
+                Path.GetTempPath(), "virtual-dresser", Path.GetRandomFileName());
             Directory.CreateDirectory(tempDir);
 
             var result = new ParseResult
             {
-                Filename = Path.GetFileName(packagePath),
+                Filename   = Path.GetFileName(packagePath),
                 TempDirPath = tempDir
             };
 
-            // GUID → pathname 매핑 구축
-            var guidToPathname = new Dictionary<string, string>();
-            var guidToAssetData = new Dictionary<string, byte[]>();
-            var matFiles = new Dictionary<string, string>(); // guid → .mat 텍스트
-
-            // tar.gz 해제
-            using var fileStream = File.OpenRead(packagePath);
-            using var gzStream = new GZipInputStream(fileStream);
-            using var tar = TarArchive.CreateInputTarArchive(gzStream, Encoding.UTF8);
-
-            // 1차 패스: pathname 수집
-            var tarEntries = ReadAllTarEntries(packagePath);
-
-            foreach (var (entryName, data) in tarEntries)
-            {
-                var parts = entryName.Split('/');
-                if (parts.Length < 2) continue;
-
-                var guid = parts[0];
-                var filename = parts[parts.Length - 1];
-
-                if (filename == "pathname")
-                {
-                    guidToPathname[guid] = Encoding.UTF8.GetString(data).Trim();
-                }
-                else if (filename == "asset")
-                {
-                    guidToAssetData[guid] = data;
-                }
-                else if (filename.EndsWith(".mat") || entryName.Contains(".mat"))
-                {
-                    matFiles[guid] = Encoding.UTF8.GetString(data);
-                }
-            }
+            // 백그라운드 스레드에서 tar 스트리밍 (메인 스레드 블로킹 방지)
+            var (guidToPathname, guidToTempAsset, matContents) =
+                await Task.Run(() => StreamTarToDisk(packagePath, tempDir));
 
             result.TotalEntries = guidToPathname.Count;
 
-            // 2차 패스: FBX / 텍스처 추출
+            // GUID→pathname 매핑으로 임시 파일을 최종 위치로 이동
             var fbxBySize = new List<(string path, long size)>();
 
             foreach (var (guid, pathname) in guidToPathname)
             {
                 var ext = Path.GetExtension(pathname).ToLowerInvariant();
 
-                if (!guidToAssetData.TryGetValue(guid, out var assetData)) continue;
+                if (ext == ".mat" && matContents.TryGetValue(guid, out var matText))
+                {
+                    var matResult = ParseMatFile(matText,
+                        Path.GetFileNameWithoutExtension(pathname));
+                    if (matResult != null)
+                        result.MaterialTextureMap[
+                            Path.GetFileNameWithoutExtension(pathname)] = matResult;
+                    continue;
+                }
+
+                if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
+
+                var finalName = SafeFileName(tempDir, Path.GetFileName(pathname));
+                var finalPath = Path.Combine(tempDir, finalName);
+
+                try { File.Move(tmpPath, finalPath); }
+                catch { finalPath = tmpPath; } // 이동 실패 시 임시 경로 그대로 사용
 
                 if (ext == ".fbx")
                 {
-                    var outPath = Path.Combine(tempDir, Path.GetFileName(pathname));
-                    await File.WriteAllBytesAsync(outPath, assetData);
-                    fbxBySize.Add((outPath, assetData.Length));
+                    fbxBySize.Add((finalPath, new FileInfo(finalPath).Length));
                 }
                 else if (IsTextureExtension(ext))
                 {
-                    var outPath = Path.Combine(tempDir, Path.GetFileName(pathname));
-                    await File.WriteAllBytesAsync(outPath, assetData);
-                    result.ExtractedTextureNames.Add(Path.GetFileName(pathname));
+                    result.ExtractedTextureNames.Add(finalName);
                 }
-                else if (ext == ".mat" && matFiles.ContainsKey(guid))
+                else
                 {
-                    var matResult = ParseMatFile(matFiles[guid], Path.GetFileNameWithoutExtension(pathname));
-                    if (matResult != null)
-                        result.MaterialTextureMap[Path.GetFileNameWithoutExtension(pathname)] = matResult;
+                    try { File.Delete(finalPath); } catch { }
                 }
             }
 
-            // FBX를 크기 내림차순 정렬 (가장 큰 것 = 메인 아바타/의상)
+            // 남은 임시 asset 파일 정리
+            foreach (var tmp in guidToTempAsset.Values)
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+
             fbxBySize.Sort((a, b) => b.size.CompareTo(a.size));
             result.ExtractedFbxPaths = fbxBySize.Select(x => x.path).ToList();
 
-            // 에셋 타입 자동 판별
             InferAssetType(result);
 
             Debug.Log($"[Parser] {result.Filename}: FBX {result.ExtractedFbxPaths.Count}개, " +
@@ -200,6 +179,67 @@ namespace VirtualDresser.Runtime
                       $"타입={result.DetectedType}({result.Confidence:F2})");
 
             return result;
+        }
+
+        /// <summary>
+        /// tar.gz를 단일 패스로 스트리밍하면서 asset을 임시 파일로 직접 저장.
+        /// RAM에 에셋 데이터를 올리지 않음.
+        /// </summary>
+        private static (
+            Dictionary<string, string> guidToPathname,
+            Dictionary<string, string> guidToTempAsset,
+            Dictionary<string, string> matContents)
+            StreamTarToDisk(string packagePath, string tempDir)
+        {
+            var guidToPathname  = new Dictionary<string, string>();
+            var guidToTempAsset = new Dictionary<string, string>();
+            var matContents     = new Dictionary<string, string>();
+
+            using var fs  = File.OpenRead(packagePath);
+            using var gz  = new GZipInputStream(fs);
+            using var tar = new TarInputStream(gz, Encoding.UTF8);
+
+            TarEntry entry;
+            while ((entry = tar.GetNextEntry()) != null)
+            {
+                if (entry.IsDirectory) continue;
+
+                var name  = entry.Name.TrimStart('/');
+                var slash = name.IndexOf('/');
+                if (slash < 0) continue;
+
+                var guid     = name[..slash];
+                var filename = name[(slash + 1)..];
+
+                if (filename == "pathname")
+                {
+                    // pathname은 소형 텍스트 → 메모리로 읽기
+                    using var ms = new MemoryStream((int)Math.Min(entry.Size, 4096));
+                    tar.CopyEntryContents(ms);
+                    guidToPathname[guid] = Encoding.UTF8.GetString(ms.ToArray()).Trim();
+                }
+                else if (filename == "asset")
+                {
+                    // asset은 대용량 → 디스크 임시 파일로 직접 스트리밍
+                    var tmpPath = Path.Combine(tempDir, guid + "_asset.tmp");
+                    using var outFile = File.Create(tmpPath);
+                    tar.CopyEntryContents(outFile);
+                    guidToTempAsset[guid] = tmpPath;
+                }
+                else if (filename.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var ms = new MemoryStream();
+                    tar.CopyEntryContents(ms);
+                    matContents[guid] = Encoding.UTF8.GetString(ms.ToArray());
+                }
+                else
+                {
+                    // 그 외 항목(preview, meta 등) 스킵 — 읽지 않으면 스트림 위치가 안 맞으므로 반드시 소비
+                    tar.CopyEntryContents(Stream.Null);
+                }
+            }
+
+            return (guidToPathname, guidToTempAsset, matContents);
         }
 
         // ─── .mat 파일 파싱 ───
@@ -278,23 +318,18 @@ namespace VirtualDresser.Runtime
         private static bool IsTextureExtension(string ext) =>
             ext is ".png" or ".jpg" or ".jpeg" or ".tga" or ".psd" or ".exr";
 
-        // NOTE: 실제 구현에서는 스트리밍 방식으로 tar 읽기 필요
-        private static List<(string name, byte[] data)> ReadAllTarEntries(string packagePath)
+        /// <summary>파일명 충돌 방지: 같은 이름이 있으면 _1, _2 ... 붙임</summary>
+        private static string SafeFileName(string dir, string filename)
         {
-            var entries = new List<(string, byte[])>();
-            using var fs = File.OpenRead(packagePath);
-            using var gz = new GZipInputStream(fs);
-            using var tar = new TarInputStream(gz, Encoding.UTF8);
-
-            TarEntry entry;
-            while ((entry = tar.GetNextEntry()) != null)
+            if (!File.Exists(Path.Combine(dir, filename))) return filename;
+            var name = Path.GetFileNameWithoutExtension(filename);
+            var ext  = Path.GetExtension(filename);
+            for (int i = 1; i < 100; i++)
             {
-                if (entry.IsDirectory) continue;
-                using var ms = new MemoryStream();
-                tar.CopyEntryContents(ms);
-                entries.Add((entry.Name, ms.ToArray()));
+                var candidate = $"{name}_{i}{ext}";
+                if (!File.Exists(Path.Combine(dir, candidate))) return candidate;
             }
-            return entries;
+            return filename;
         }
 
         private static async Task ExtractFbxFromZipAsync(ZipFile zip, string tempDir, ParseResult result)
