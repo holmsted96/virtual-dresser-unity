@@ -2,7 +2,14 @@
     <ui:VisualElement name="root" style="flex-direction: row; width: 100%; height: 100%;">
 
         <!-- 왼쪽: 3D 뷰어 영역 — 투명하게 유지 -->
-        <ui:VisualElement name="viewer-area" style="flex: 1;" />
+        <ui:VisualElement name="viewer-area" style="flex: 1; position: relative;">
+            <ui:Button name="reset-view-btn" text="Reset View"
+                style="position: absolute; bottom: 16px; left: 16px;
+                       width: 100px; height: 30px; font-size: 11px;
+                       background-color: rgba(30, 30, 30, 200);
+                       color: rgb(200, 200, 200);
+                       border-color: rgb(80, 80, 80); border-width: 1px;" />
+        </ui:VisualElement>
 
         <!-- 오른쪽: 컨트롤 패널 -->
         <ui:VisualElement name="control-panel"

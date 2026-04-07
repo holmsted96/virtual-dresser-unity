@@ -267,8 +267,10 @@ namespace VirtualDresser.Runtime
         }
 
         /// <summary>
-        /// 텍스처 파일명과 머티리얼/메시 이름 간 간단한 유사도 점수.
-        /// 공통 토큰 수 기반.
+        /// 텍스처 파일명과 머티리얼/메시 이름 간 유사도 점수.
+        /// 1) _mat/_d/_col 등 공통 suffix 제거 후 비교
+        /// 2) 완전 포함 → 100
+        /// 3) 토큰 공통 수 × 가중치
         /// </summary>
         private static int SimilarityScore(string texName, string matName)
         {
@@ -278,14 +280,39 @@ namespace VirtualDresser.Runtime
             // 완전 포함
             if (texLower.Contains(matLower) || matLower.Contains(texLower)) return 100;
 
-            // 토큰 공통 수
-            var texTokens = System.Text.RegularExpressions.Regex.Split(texLower, @"[\s_\-\.]+");
-            var matTokens = System.Text.RegularExpressions.Regex.Split(matLower, @"[\s_\-\.]+");
+            // ★ 공통 suffix 제거 후 재비교
+            var texStripped = StripTextureSuffix(texLower);
+            var matStripped = StripMaterialSuffix(matLower);
+
+            if (!string.IsNullOrEmpty(texStripped) && !string.IsNullOrEmpty(matStripped))
+            {
+                if (texStripped.Contains(matStripped) || matStripped.Contains(texStripped)) return 90;
+            }
+
+            // 토큰 공통 수 (양쪽 모두 stripped 버전으로 비교)
+            var texTokens = System.Text.RegularExpressions.Regex.Split(texStripped ?? texLower, @"[\s_\-\.]+");
             int common = 0;
+            var matCompare = matStripped ?? matLower;
             foreach (var t in texTokens)
-                if (t.Length > 1 && matLower.Contains(t)) common++;
+                if (t.Length > 1 && matCompare.Contains(t)) common++;
             return common;
         }
+
+        // 텍스처 파일명에서 흔한 suffix 제거: _d, _col, _albedo, _main, _01 등
+        private static readonly System.Text.RegularExpressions.Regex TexSuffixRegex =
+            new(@"[_\-](d|col|color|albedo|main|diff|diffuse|base|body|0\d|1\d)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static string StripTextureSuffix(string name) =>
+            TexSuffixRegex.Replace(name, "");
+
+        // 머티리얼 이름에서 흔한 suffix 제거: _mat, _material, _m 등
+        private static readonly System.Text.RegularExpressions.Regex MatSuffixRegex =
+            new(@"[_\-](mat|material|m)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static string StripMaterialSuffix(string name) =>
+            MatSuffixRegex.Replace(name, "");
 
         // ─── 텍스처 로드 ───
 

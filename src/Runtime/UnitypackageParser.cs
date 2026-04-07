@@ -271,12 +271,16 @@ namespace VirtualDresser.Runtime
             {
                 var trimmed = line.Trim();
 
+                // ★ .mat YAML 구조: "    - _MainTex:" → trim → "- _MainTex:"
+                //   리스트 항목 접두사 "- " 를 제거해야 StartsWith 가 올바르게 동작
+                var propKey = trimmed.TrimStart('-', ' ');
+
                 // 프로퍼티 키 감지
-                if (trimmed.StartsWith("_MainTex:"))         currentProp = "main";
-                else if (trimmed.StartsWith("_BumpMap:") ||
-                         trimmed.StartsWith("_NormalMap:"))   currentProp = "bump";
-                else if (trimmed.StartsWith("_EmissionMap:")) currentProp = "emission";
-                else if (trimmed.StartsWith("_") && trimmed.Contains(":"))
+                if (propKey.StartsWith("_MainTex:"))          currentProp = "main";
+                else if (propKey.StartsWith("_BumpMap:") ||
+                         propKey.StartsWith("_NormalMap:"))    currentProp = "bump";
+                else if (propKey.StartsWith("_EmissionMap:"))  currentProp = "emission";
+                else if (propKey.StartsWith("_") && propKey.Contains(":"))
                     currentProp = null; // 다른 프로퍼티 → 리셋
 
                 if (currentProp == null) continue;

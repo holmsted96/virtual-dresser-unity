@@ -279,6 +279,15 @@ namespace VirtualDresser.UI
             // 품질 토글
             _qualityToggleBtn?.RegisterCallback<ClickEvent>(_ => ToggleQualityMode());
 
+            // 카메라 리셋 버튼
+            _root.Q<Button>("reset-view-btn")
+                ?.RegisterCallback<ClickEvent>(_ =>
+                {
+                    var cam = Camera.main
+                        ?? UnityEngine.Object.FindObjectsOfType<Camera>()?.FirstOrDefault();
+                    cam?.GetComponent<VirtualDresser.Runtime.CameraController>()?.ResetView();
+                });
+
             // 빌드 버튼
             _root.Q<Button>("build-btn")
                 ?.RegisterCallback<ClickEvent>(_ => OnBuildButtonClicked());
@@ -723,32 +732,150 @@ namespace VirtualDresser.UI
 
         private VisualElement BuildMeshEntryElement(MeshEntry entry)
         {
-            var row = new VisualElement();
-            row.AddToClassList("mesh-row");
+            var container = new VisualElement();
+            container.style.marginBottom = 1;
 
-            // 가시성 토글
+            // ── 메인 행: [toggle] [name] [Hide/Show] [Del] [...] ──
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems    = Align.Center;
+            row.style.paddingLeft   = 4;
+            row.style.paddingRight  = 2;
+
             var toggle = new Toggle { value = entry.IsVisible };
+            toggle.style.marginRight = 4;
             toggle.RegisterValueChangedCallback(e => SetMeshVisible(entry, e.newValue));
 
-            // 메쉬 이름
-            var label = new Label(entry.MeshName);
-            label.AddToClassList("mesh-name");
+            var nameLabel = new Label(entry.MeshName);
+            nameLabel.style.flexGrow           = 1;
+            nameLabel.style.fontSize           = 11;
+            nameLabel.style.overflow           = Overflow.Hidden;
+            nameLabel.style.whiteSpace         = WhiteSpace.NoWrap;
+            nameLabel.style.unityTextOverflow  = TextOverflow.Ellipsis;
+            nameLabel.style.color              = entry.IsVisible
+                ? new StyleColor(Color.white)
+                : new StyleColor(new Color(0.4f, 0.4f, 0.4f));
 
-            // 숨김 버튼 (토글과 동일하지만 명시적 버튼)
             var hideBtn = new Button(() => SetMeshVisible(entry, !entry.IsVisible))
             {
-                text = entry.IsVisible ? "숨김" : "표시"
+                text = entry.IsVisible ? "Hide" : "Show"
             };
-            hideBtn.AddToClassList("mesh-hide-btn");
+            hideBtn.style.width    = 38;
+            hideBtn.style.height   = 20;
+            hideBtn.style.fontSize = 10;
 
-            // 삭제 버튼
-            var deleteBtn = new Button(() => DeleteMesh(entry)) { text = "🗑" };
-            deleteBtn.AddToClassList("mesh-delete-btn");
+            var deleteBtn = new Button(() => DeleteMesh(entry)) { text = "Del" };
+            deleteBtn.style.width           = 30;
+            deleteBtn.style.height          = 20;
+            deleteBtn.style.fontSize        = 10;
+            deleteBtn.style.backgroundColor = new StyleColor(new Color(0.45f, 0.12f, 0.12f));
+
+            // 트랜스폼 편집 패널 (기본 숨김, "..." 버튼으로 토글)
+            var transformPanel = BuildTransformPanel(entry);
+            transformPanel.style.display = DisplayStyle.None;
+
+            var editBtn = new Button(() =>
+            {
+                var isOpen = transformPanel.style.display == DisplayStyle.Flex;
+                transformPanel.style.display = isOpen ? DisplayStyle.None : DisplayStyle.Flex;
+            }) { text = "..." };
+            editBtn.style.width    = 24;
+            editBtn.style.height   = 20;
+            editBtn.style.fontSize = 10;
 
             row.Add(toggle);
-            row.Add(label);
+            row.Add(nameLabel);
             row.Add(hideBtn);
             row.Add(deleteBtn);
+            row.Add(editBtn);
+
+            container.Add(row);
+            container.Add(transformPanel);
+            return container;
+        }
+
+        /// <summary>
+        /// 메시별 Position / Rotation / Scale 수치 편집 패널.
+        /// 의상 미세 위치 보정용 (스킨드 메시 특성상 큰 이동은 본 계층과 어긋남).
+        /// </summary>
+        private static VisualElement BuildTransformPanel(MeshEntry entry)
+        {
+            var panel = new VisualElement();
+            panel.style.paddingLeft     = 22;
+            panel.style.paddingRight    = 4;
+            panel.style.paddingTop      = 4;
+            panel.style.paddingBottom   = 4;
+            panel.style.backgroundColor = new StyleColor(new Color(0.13f, 0.13f, 0.13f));
+            panel.style.marginBottom    = 2;
+
+            if (entry.Renderer == null)
+            {
+                panel.Add(new Label("(renderer null)") { style = { fontSize = 10 } });
+                return panel;
+            }
+
+            var tf = entry.Renderer.transform;
+            panel.Add(BuildVec3Row("Pos", tf.localPosition,
+                (axis, v) => { var p = tf.localPosition; if (axis==0) p.x=v; else if (axis==1) p.y=v; else p.z=v; tf.localPosition = p; }));
+            panel.Add(BuildVec3Row("Rot", tf.localEulerAngles,
+                (axis, v) => { var r = tf.localEulerAngles; if (axis==0) r.x=v; else if (axis==1) r.y=v; else r.z=v; tf.localEulerAngles = r; }));
+            panel.Add(BuildVec3Row("Sca", tf.localScale,
+                (axis, v) => { var s = tf.localScale; if (axis==0) s.x=v; else if (axis==1) s.y=v; else s.z=v; tf.localScale = s; }));
+
+            var resetBtn = new Button(() =>
+            {
+                tf.localPosition    = Vector3.zero;
+                tf.localEulerAngles = Vector3.zero;
+                tf.localScale       = Vector3.one;
+            }) { text = "Reset Transform" };
+            resetBtn.style.marginTop  = 4;
+            resetBtn.style.height     = 20;
+            resetBtn.style.fontSize   = 10;
+            panel.Add(resetBtn);
+
+            return panel;
+        }
+
+        private static VisualElement BuildVec3Row(
+            string rowLabel, Vector3 initial, Action<int, float> onChange)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems    = Align.Center;
+            row.style.marginBottom  = 2;
+
+            var lbl = new Label(rowLabel);
+            lbl.style.width    = 26;
+            lbl.style.fontSize = 10;
+            lbl.style.color    = new StyleColor(new Color(0.55f, 0.55f, 0.55f));
+            row.Add(lbl);
+
+            var axisNames  = new[] { "X", "Y", "Z" };
+            var axisValues = new[] { initial.x, initial.y, initial.z };
+            var axisColors = new[] {
+                new Color(0.85f, 0.3f, 0.3f),
+                new Color(0.3f, 0.85f, 0.3f),
+                new Color(0.3f, 0.5f, 0.9f)
+            };
+
+            for (int i = 0; i < 3; i++)
+            {
+                var idx = i;
+                var axisLbl = new Label(axisNames[i]);
+                axisLbl.style.width       = 10;
+                axisLbl.style.fontSize    = 9;
+                axisLbl.style.color       = new StyleColor(axisColors[i]);
+                axisLbl.style.marginRight = 1;
+
+                var field = new FloatField { value = axisValues[i] };
+                field.style.width    = 52;
+                field.style.fontSize = 10;
+                field.RegisterValueChangedCallback(e => onChange(idx, e.newValue));
+
+                row.Add(axisLbl);
+                row.Add(field);
+            }
+
             return row;
         }
 
