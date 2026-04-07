@@ -50,6 +50,31 @@ namespace VirtualDresser.Runtime
         /// ParseResult를 바탕으로 GameObject의 모든 SkinnedMeshRenderer에 텍스처 적용.
         /// 기존 TriLib 머티리얼에 텍스처만 덮어씌움 (새 머티리얼 생성 안 함).
         /// </summary>
+        // ─── lilToon 셰이더 캐시 ───
+        private static Shader _shaderLilToon;
+        private static Shader _shaderLilToonCutout;
+        private static Shader _shaderLilToonTransparent;
+
+        private static Shader GetLilToonShader(string meshName)
+        {
+            _shaderLilToon            ??= Shader.Find("lilToon");
+            _shaderLilToonCutout      ??= Shader.Find("Hidden/lilToonCutout");
+            _shaderLilToonTransparent ??= Shader.Find("Hidden/lilToonTransparent");
+
+            var lower = meshName.ToLowerInvariant();
+
+            // 헤어: alpha cutout
+            if (lower.Contains("hair") || lower.Contains("wig") || lower.Contains("kami")
+                || lower.Contains("eyelash") || lower.Contains("lash"))
+                return _shaderLilToonCutout ?? _shaderLilToon;
+
+            // 눈: transparent
+            if (lower.Contains("eye") || lower.Contains("iris") || lower.Contains("pupil"))
+                return _shaderLilToonTransparent ?? _shaderLilToon;
+
+            return _shaderLilToon;
+        }
+
         public static async Task ApplyTexturesAsync(GameObject go, ParseResult parseResult)
         {
             if (go == null || parseResult == null) return;
@@ -67,9 +92,7 @@ namespace VirtualDresser.Runtime
                 return;
             }
 
-            // 디버그: 로드된 텍스처 목록
-            Debug.Log($"[MaterialManager] 로드된 텍스처 {textures.Count}장: " +
-                      string.Join(", ", textures.Keys));
+            Debug.Log($"[MaterialManager] 로드된 텍스처 {textures.Count}장");
 
             int applied = 0;
             foreach (var smr in renderers)
@@ -77,15 +100,27 @@ namespace VirtualDresser.Runtime
                 var mat = smr.sharedMaterial;
                 if (mat == null) continue;
 
+                // ── lilToon 셰이더로 교체 ──
+                var lilShader = GetLilToonShader(smr.name);
+                if (lilShader != null && mat.shader != lilShader)
+                {
+                    mat.shader = lilShader;
+                    // lilToon 기본값: 양면 렌더링 끄기, 알파 클리핑 활성화
+                    if (mat.HasProperty("_Cutoff"))
+                        mat.SetFloat("_Cutoff", 0.5f);
+                }
+                else if (lilShader == null)
+                {
+                    Debug.LogWarning("[MaterialManager] lilToon 셰이더를 찾을 수 없음 — URP/Lit 폴백 사용");
+                }
+
                 // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
                 var matchKey = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
-                Debug.Log($"[MaterialManager] 매칭 시도: mesh={smr.name} mat={mat.name}");
-
                 var matched = ApplyTexturesToMaterial(mat, matchKey, textures, parseResult);
                 if (matched) applied++;
             }
 
-            Debug.Log($"[MaterialManager] {applied}/{renderers.Length}개 메쉬에 텍스처 적용 완료");
+            Debug.Log($"[MaterialManager] {applied}/{renderers.Length}개 메쉬에 lilToon + 텍스처 적용 완료");
         }
 
         private static bool ApplyTexturesToMaterial(
@@ -98,7 +133,7 @@ namespace VirtualDresser.Runtime
             if (parseResult.MaterialTextureMap.TryGetValue(matchKey, out var matInfo))
             {
                 if (matInfo.MainTex != null && textures.TryGetValue(matInfo.MainTex, out var t))
-                { mat.SetTexture("_BaseMap", t); mat.SetTexture("_MainTex", t); applied = true; }
+                { SetMainTex(mat, t); applied = true; }
                 if (matInfo.BumpMap != null && textures.TryGetValue(matInfo.BumpMap, out var b))
                     mat.SetTexture("_BumpMap", b);
                 if (matInfo.EmissionMap != null && textures.TryGetValue(matInfo.EmissionMap, out var e))
@@ -132,8 +167,7 @@ namespace VirtualDresser.Runtime
 
             if (bestMain != null)
             {
-                mat.SetTexture("_BaseMap", bestMain);
-                mat.SetTexture("_MainTex", bestMain);
+                SetMainTex(mat, bestMain);
                 applied = true;
             }
 
@@ -277,6 +311,17 @@ namespace VirtualDresser.Runtime
                 return "_MainTex";
 
             return null;
+        }
+
+        /// <summary>
+        /// lilToon은 _MainTex만 사용, URP/Lit 폴백은 _BaseMap + _MainTex 모두 세팅.
+        /// </summary>
+        private static void SetMainTex(Material mat, Texture2D tex)
+        {
+            mat.SetTexture("_MainTex", tex);
+            // URP/Lit 폴백용 (lilToon에는 없지만 세팅해도 무해)
+            if (mat.HasProperty("_BaseMap"))
+                mat.SetTexture("_BaseMap", tex);
         }
 
         /// <summary>

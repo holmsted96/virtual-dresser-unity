@@ -121,28 +121,47 @@ namespace VirtualDresser.Runtime
             };
 
             // 백그라운드 스레드에서 tar 스트리밍 (메인 스레드 블로킹 방지)
-            var (guidToPathname, guidToTempAsset, matContents) =
+            var (guidToPathname, guidToTempAsset) =
                 await Task.Run(() => StreamTarToDisk(packagePath, tempDir));
 
             result.TotalEntries = guidToPathname.Count;
 
-            // GUID→pathname 매핑으로 임시 파일을 최종 위치로 이동
+            // ── 1패스: .mat 파일을 temp 파일에서 읽어 파싱 ──
+            // (.mat asset은 텍스트 YAML이므로 ReadAllText 가능)
+            foreach (var (guid, pathname) in guidToPathname)
+            {
+                if (!Path.GetExtension(pathname).Equals(".mat", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
+
+                try
+                {
+                    var matText = File.ReadAllText(tmpPath);
+                    var matResult = ParseMatFile(matText,
+                        Path.GetFileNameWithoutExtension(pathname),
+                        guidToPathname);
+                    if (matResult != null)
+                        result.MaterialTextureMap[Path.GetFileNameWithoutExtension(pathname)] = matResult;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Parser] .mat 읽기 실패: {pathname} — {ex.Message}");
+                }
+                finally
+                {
+                    try { File.Delete(tmpPath); } catch { }
+                    guidToTempAsset.Remove(guid);
+                }
+            }
+
+            Debug.Log($"[Parser] .mat 파싱 완료: {result.MaterialTextureMap.Count}개");
+
+            // ── 2패스: FBX + 텍스처 temp 파일을 최종 위치로 이동 ──
             var fbxBySize = new List<(string path, long size)>();
 
             foreach (var (guid, pathname) in guidToPathname)
             {
                 var ext = Path.GetExtension(pathname).ToLowerInvariant();
-
-                if (ext == ".mat" && matContents.TryGetValue(guid, out var matText))
-                {
-                    var matResult = ParseMatFile(matText,
-                        Path.GetFileNameWithoutExtension(pathname));
-                    if (matResult != null)
-                        result.MaterialTextureMap[
-                            Path.GetFileNameWithoutExtension(pathname)] = matResult;
-                    continue;
-                }
-
                 if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
 
                 var finalName = SafeFileName(tempDir, Path.GetFileName(pathname));
@@ -187,13 +206,11 @@ namespace VirtualDresser.Runtime
         /// </summary>
         private static (
             Dictionary<string, string> guidToPathname,
-            Dictionary<string, string> guidToTempAsset,
-            Dictionary<string, string> matContents)
+            Dictionary<string, string> guidToTempAsset)
             StreamTarToDisk(string packagePath, string tempDir)
         {
             var guidToPathname  = new Dictionary<string, string>();
             var guidToTempAsset = new Dictionary<string, string>();
-            var matContents     = new Dictionary<string, string>();
 
             using var fs  = File.OpenRead(packagePath);
             using var gz  = new GZipInputStream(fs);
@@ -220,17 +237,12 @@ namespace VirtualDresser.Runtime
                 }
                 else if (filename == "asset")
                 {
-                    // asset은 대용량 → 디스크 임시 파일로 직접 스트리밍
+                    // asset은 디스크 임시 파일로 직접 스트리밍 (대용량 OOM 방지)
+                    // .mat 여부는 pathname을 받은 뒤 판단 → 일단 모두 저장
                     var tmpPath = Path.Combine(tempDir, guid + "_asset.tmp");
                     using var outFile = File.Create(tmpPath);
                     tar.CopyEntryContents(outFile);
                     guidToTempAsset[guid] = tmpPath;
-                }
-                else if (filename.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
-                {
-                    using var ms = new MemoryStream();
-                    tar.CopyEntryContents(ms);
-                    matContents[guid] = Encoding.UTF8.GetString(ms.ToArray());
                 }
                 else
                 {
@@ -239,39 +251,72 @@ namespace VirtualDresser.Runtime
                 }
             }
 
-            return (guidToPathname, guidToTempAsset, matContents);
+            return (guidToPathname, guidToTempAsset);
         }
 
         // ─── .mat 파일 파싱 ───
-        // src-tauri/src/lib.rs parse_mat_file() 포팅
-        private static MaterialTextures ParseMatFile(string matContent, string matName)
+        // .mat YAML에서 GUID 추출 → guidToPathname으로 실제 텍스처 파일명 역매핑
+        private static readonly System.Text.RegularExpressions.Regex GuidRegex =
+            new(@"guid:\s*([a-f0-9]{32})", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static MaterialTextures ParseMatFile(
+            string matContent, string matName,
+            Dictionary<string, string> guidToPathname)
         {
             var result = new MaterialTextures();
             bool found = false;
 
+            string currentProp = null;
             foreach (var line in matContent.Split('\n'))
             {
                 var trimmed = line.Trim();
 
-                // "_MainTex: {fileID: 0, guid: xxxx, type: 3}" 패턴
-                if (trimmed.StartsWith("_MainTex:") && trimmed.Contains("guid:"))
+                // 프로퍼티 키 감지
+                if (trimmed.StartsWith("_MainTex:"))         currentProp = "main";
+                else if (trimmed.StartsWith("_BumpMap:") ||
+                         trimmed.StartsWith("_NormalMap:"))   currentProp = "bump";
+                else if (trimmed.StartsWith("_EmissionMap:")) currentProp = "emission";
+                else if (trimmed.StartsWith("_") && trimmed.Contains(":"))
+                    currentProp = null; // 다른 프로퍼티 → 리셋
+
+                if (currentProp == null) continue;
+                if (!trimmed.Contains("guid:")) continue;
+
+                var match = GuidRegex.Match(trimmed);
+                if (!match.Success) continue;
+
+                var texGuid = match.Groups[1].Value;
+                // GUID → 실제 pathname 역매핑
+                string texFilename = null;
+                if (guidToPathname.TryGetValue(texGuid, out var texPathname))
+                    texFilename = Path.GetFileName(texPathname);
+
+                if (texFilename == null) continue; // guid=0 또는 패키지 외부 텍스처
+
+                switch (currentProp)
                 {
-                    // NOTE: guid → 텍스처 파일명 역매핑 필요
-                    // 현재는 matName 기반 휴리스틱 fallback
-                    result.MainTex = matName + ".png"; // placeholder
-                    found = true;
+                    case "main":
+                        result.MainTex = texFilename;
+                        found = true;
+                        break;
+                    case "bump":
+                        result.BumpMap = texFilename;
+                        break;
+                    case "emission":
+                        result.EmissionMap = texFilename;
+                        break;
                 }
-                else if (trimmed.StartsWith("_BumpMap:") && trimmed.Contains("guid:"))
-                {
-                    result.BumpMap = matName + "_normal.png";
-                }
-                else if (trimmed.StartsWith("_EmissionMap:") && trimmed.Contains("guid:"))
-                {
-                    result.EmissionMap = matName + "_emission.png";
-                }
+                currentProp = null;
             }
 
-            return found ? result : null;
+            if (!found)
+            {
+                // .mat에 텍스처 GUID가 없는 경우(외부 패키지 참조 등) — 이름 기반 fallback
+                Debug.LogWarning($"[Parser] .mat '{matName}': GUID 매핑 실패, 이름 기반 fallback");
+                return null;
+            }
+
+            return result;
         }
 
         // ─── 에셋 타입 판별 ───

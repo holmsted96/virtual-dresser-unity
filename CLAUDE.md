@@ -12,21 +12,22 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
     Runtime/                    ← C# 런타임 스크립트
     UI/                         ← DresserUI.cs + dresser.uxml
     Editor/                     ← BatchImporter.cs (Editor 전용)
+    Resources/avatar-configs/   ← shinano.json 등 7종 (git에 포함)
   Packages/
     manifest.json               ← Unity 패키지 목록
   vd-warudo-converter/          ← .warudo 빌드용 별도 Unity 2021.3 프로젝트
     Assets/WarudoConverter/Editor/WarudoBuildScript.cs
 
 실제 Unity 프로젝트 경로 (로컬 전용, git에 없음):
-  c:/vd/virtual-dresser-app/    ← Unity 2022.3 LTS 프로젝트
+  c:/vd/virtual-dresser-app/Dresser/    ← Unity 2021.3.45f2 프로젝트 (메인 + warudo 동일 버전)
     Assets/VirtualDresser/      ← src/ 파일들이 복사되는 위치
     Assets/UI/dresser.uxml
-    Assets/Resources/avatar-configs/  ← shinano.json 등 7종
+    Assets/Resources/avatar-configs/  ← src/Resources/avatar-configs/ 에서 복사
     Assets/TriLib/              ← TriLib 2.6.1 (에셋스토어 구매)
     Packages/manifest.json
 ```
 
-> ⚠️ **중요**: 코드 편집은 `c:/vd/virtual-dresser-app/Assets/VirtualDresser/` 에서 하고,
+> ⚠️ **중요**: 코드 편집은 `c:/vd/virtual-dresser-app/Dresser/Assets/VirtualDresser/` 에서 하고,
 > git push 전에 `src/`로 수동 동기화 필요. (아래 동기화 명령 참고)
 
 ## 완료된 작업
@@ -59,13 +60,18 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 ## 남은 작업
 
 ### 즉시 필요 (다른 PC 셋업)
-1. Unity Hub에서 `2021.3.45f2` 설치
-2. Unity Hub에 `vd-warudo-converter` 프로젝트 추가 (경로: `virtual-dresser-unity/vd-warudo-converter/`)
-3. Warudo SDK 설치 (선택, 없으면 AssetBundle 폴백 모드로 동작):
+1. Unity Hub에서 `2021.3.45f2` 설치 (Windows Build Support 모듈 포함)
+2. Unity Hub → New Project → 3D(URP) → 경로: `c:/vd/virtual-dresser-app/`
+3. 소스코드 복사 (아래 "셋업 명령" 참고)
+4. TriLib 2 에셋스토어에서 재임포트 (구매 완료 상태)
+5. Unity Hub에 `vd-warudo-converter` 프로젝트 추가 (경로: `virtual-dresser-unity/vd-warudo-converter/`)
+6. Warudo SDK 설치 (선택, 없으면 AssetBundle 폴백 모드로 동작):
    - Package Manager → Add from git URL: `https://github.com/HakuyaLabs/Warudo-Mod-Tool.git#0.14.3.10`
-4. `c:/vd/virtual-dresser-app/` 에 Unity 프로젝트 열기 (Unity 2022.3 LTS)
-5. TriLib 2 에셋스토어에서 재임포트 (구매 완료 상태)
-6. SharpZipLib — TriLib 내장 버전 사용 (별도 설치 불필요)
+
+### 개선 TODO (MVP 이후)
+- 텍스처/머티리얼 매칭 정확도 향상 — 루미나 등 일부 아바타에서 깨짐 발생
+  - `.mat` GUID 역매핑은 구현됨, 아직 완전하지 않음
+  - 개선 방향: 파일명 유사도 fallback 로직 강화 / 사용자 수동 매칭 UI
 
 ### 다음 스프린트: B — AvatarConfig boneMap 통합
 - `AvatarConfig.cs`의 boneMap 별칭 활용해 `MeshCombiner` 매핑 성공률 향상
@@ -79,6 +85,13 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 ### 다음 스프린트: D — Windows Standalone 빌드
 - 빌드 후 `.exe` 실행 테스트
 - WindowsFilePicker Standalone 경로 확인
+
+### 다음 스프린트: E — 메시 편집 기능
+- 개별 메시 **삭제** 버튼 (레이어 패널)
+- 메시 **표시/숨김** 토글 (SkinnedMeshRenderer.enabled)
+- 메시 **이동/회전/스케일** 조정 (Transform 직접 수정, 의상 미세 위치 보정용)
+- ⚠️ 스킨드 메시 특성상 큰 이동은 본 계층과 어긋날 수 있음 → 미세 보정 용도로 제한
+- 구현 위치: `DresserUI.cs` 메시 패널에 수치 입력 필드 추가
 
 ## 중요 기술 결정
 
@@ -107,10 +120,27 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - UIDocument가 3D씬을 덮는 문제
 - 해결: `viewer-area`와 `root` 의 `background-color` 제거 (투명)
 
+## 셋업 명령 (새 PC에서 Unity 프로젝트 초기 구성)
+```bash
+REPO="c:/Users/linix/OneDrive/업무용PC/vibe coding/virtual Dresser-Unity/virtual-dresser-unity"
+SRC="c:/vd/virtual-dresser-app/Dresser/Assets/VirtualDresser"
+
+mkdir -p "$SRC/Runtime" "$SRC/UI" "$SRC/Editor"
+mkdir -p "c:/vd/virtual-dresser-app/Dresser/Assets/UI"
+mkdir -p "c:/vd/virtual-dresser-app/Dresser/Assets/Resources/avatar-configs"
+
+cp "$REPO/src/Runtime/"*.cs "$SRC/Runtime/"
+cp "$REPO/src/UI/DresserUI.cs" "$SRC/UI/"
+cp "$REPO/src/UI/dresser.uxml" "c:/vd/virtual-dresser-app/Dresser/Assets/UI/"
+cp "$REPO/src/Editor/BatchImporter.cs" "$SRC/Editor/"
+cp "$REPO/src/Resources/avatar-configs/"*.json "c:/vd/virtual-dresser-app/Dresser/Assets/Resources/avatar-configs/"
+cp "$REPO/Packages/manifest.json" "c:/vd/virtual-dresser-app/Dresser/Packages/manifest.json"
+```
+
 ## 동기화 명령 (git push 전 실행)
 ```bash
-REPO="c:/Users/linix/OneDrive/업무용PC/vibe coding/Virtual Dresser/virtual-dresser-unity"
-SRC="c:/vd/virtual-dresser-app/Assets/VirtualDresser"
+REPO="c:/Users/linix/OneDrive/업무용PC/vibe coding/virtual Dresser-Unity/virtual-dresser-unity"
+SRC="c:/vd/virtual-dresser-app/Dresser/Assets/VirtualDresser"
 
 cp "$SRC/Runtime/FbxConverter.cs"             "$REPO/src/Runtime/FbxConverter.cs"
 cp "$SRC/Runtime/MaterialManager.cs"           "$REPO/src/Runtime/MaterialManager.cs"
@@ -120,11 +150,18 @@ cp "$SRC/Runtime/UnitypackageParser.cs"        "$REPO/src/Runtime/UnitypackagePa
 cp "$SRC/Runtime/AvatarConfig.cs"              "$REPO/src/Runtime/AvatarConfig.cs"
 cp "$SRC/Runtime/CameraController.cs"          "$REPO/src/Runtime/CameraController.cs"
 cp "$SRC/Runtime/UnityMainThreadDispatcher.cs" "$REPO/src/Runtime/UnityMainThreadDispatcher.cs"
+cp "$SRC/Runtime/BoneMapper.cs"                "$REPO/src/Runtime/BoneMapper.cs"
 cp "$SRC/UI/DresserUI.cs"                      "$REPO/src/UI/DresserUI.cs"
 cp "$SRC/Editor/BatchImporter.cs"              "$REPO/src/Editor/BatchImporter.cs"
-cp "c:/vd/virtual-dresser-app/Assets/UI/dresser.uxml" "$REPO/src/UI/dresser.uxml"
-cp "c:/vd/virtual-dresser-app/Packages/manifest.json" "$REPO/Packages/manifest.json"
+cp "c:/vd/virtual-dresser-app/Dresser/Assets/UI/dresser.uxml" "$REPO/src/UI/dresser.uxml"
+cp "c:/vd/virtual-dresser-app/Dresser/Packages/manifest.json" "$REPO/Packages/manifest.json"
 ```
+
+## avatar-configs 위치
+- **git 레포**: `src/Resources/avatar-configs/` (7종 포함, git 관리)
+- **Unity 프로젝트**: `c:/vd/virtual-dresser-app/Dresser/Assets/Resources/avatar-configs/` (셋업 시 복사)
+- 7종: manuka, moe, shinano, shio, mao, lumina, shinra
+- 스키마: `src/Runtime/AvatarConfig.cs`
 
 ## 패키지 의존성
 | 패키지 | 버전 | 설치 방법 |
@@ -132,9 +169,4 @@ cp "c:/vd/virtual-dresser-app/Packages/manifest.json" "$REPO/Packages/manifest.j
 | TriLib 2 | 2.6.1 | Asset Store (구매 완료) |
 | SharpZipLib | TriLib 내장 | 별도 불필요 |
 | Newtonsoft.Json | 3.2.1 | manifest.json |
-| URP | 12.1.13 (2021용) / 14.0.11 (2022용) | manifest.json |
-
-## avatar-configs 위치
-`c:/vd/virtual-dresser-app/Assets/Resources/avatar-configs/`
-7종: manuka, moe, shinano, shio, mao, lumina, shinra
-스키마: `src/Runtime/AvatarConfig.cs`
+| URP | 12.1.13 (2021.3용) | manifest.json |

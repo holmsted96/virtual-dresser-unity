@@ -1,0 +1,313 @@
+{
+  "avatarId": "shio",
+  "displayName": "シオ (Shio)",
+  "displayNameKo": "시오",
+  "boothUrl": "https://booth.pm/ja/items/5286752",
+  "version": "0.1.0",
+  "creator": "まめひなた",
+  "armatureRoot": "Armature",
+  "_comment_boneMap": "TODO: 실제 에셋 파일에서 본 이름을 추출하여 정확한 매핑 필요. 현재는 마누카 기반 공통 구조를 사용.",
+  "boneMap": {
+    "_comment_spine": "═══ 척추/몸통 (Spine Chain) ═══",
+    "Hips": [
+      "Hips",
+      "J_Bip_C_Hips",
+      "hip"
+    ],
+    "Spine": [
+      "Spine",
+      "J_Bip_C_Spine",
+      "spine"
+    ],
+    "Chest": [
+      "Chest",
+      "J_Bip_C_Chest",
+      "chest"
+    ],
+    "UpperChest": [
+      "Upper_Chest",
+      "J_Bip_C_UpperChest",
+      "Upper Chest",
+      "upper_chest"
+    ],
+    "Neck": [
+      "Neck",
+      "J_Bip_C_Neck",
+      "neck"
+    ],
+    "Head": [
+      "Head",
+      "J_Bip_C_Head",
+      "head"
+    ],
+    "_comment_left_arm": "═══ 왼쪽 팔 (Left Arm Chain) ═══",
+    "LeftShoulder": [
+      "Shoulder_L",
+      "J_Bip_L_Shoulder",
+      "Left shoulder",
+      "shoulder.L"
+    ],
+    "LeftUpperArm": [
+      "Arm_L",
+      "J_Bip_L_UpperArm",
+      "Left arm",
+      "upper_arm.L"
+    ],
+    "LeftLowerArm": [
+      "Elbow_L",
+      "J_Bip_L_LowerArm",
+      "Left elbow",
+      "lower_arm.L"
+    ],
+    "LeftHand": [
+      "Wrist_L",
+      "J_Bip_L_Hand",
+      "Left wrist",
+      "hand.L"
+    ],
+    "_comment_left_fingers": "═══ 왼손 손가락 (Left Hand Fingers) ═══",
+    "LeftThumbProximal": [
+      "Thumb1_L",
+      "J_Bip_L_Thumb1",
+      "ThumbFinger1_L"
+    ],
+    "LeftThumbIntermediate": [
+      "Thumb2_L",
+      "J_Bip_L_Thumb2",
+      "ThumbFinger2_L"
+    ],
+    "LeftThumbDistal": [
+      "Thumb3_L",
+      "J_Bip_L_Thumb3",
+      "ThumbFinger3_L"
+    ],
+    "LeftIndexProximal": [
+      "IndexFinger1_L",
+      "J_Bip_L_Index1",
+      "F_index_L_01"
+    ],
+    "LeftIndexIntermediate": [
+      "IndexFinger2_L",
+      "J_Bip_L_Index2",
+      "F_index_L_02"
+    ],
+    "LeftIndexDistal": [
+      "IndexFinger3_L",
+      "J_Bip_L_Index3",
+      "F_index_L_03"
+    ],
+    "LeftMiddleProximal": [
+      "MiddleFinger1_L",
+      "J_Bip_L_Middle1",
+      "F_middle_L_01"
+    ],
+    "LeftMiddleIntermediate": [
+      "MiddleFinger2_L",
+      "J_Bip_L_Middle2",
+      "F_middle_L_02"
+    ],
+    "LeftMiddleDistal": [
+      "MiddleFinger3_L",
+      "J_Bip_L_Middle3",
+      "F_middle_L_03"
+    ],
+    "LeftRingProximal": [
+      "RingFinger1_L",
+      "J_Bip_L_Ring1",
+      "F_ring_L_01"
+    ],
+    "LeftRingIntermediate": [
+      "RingFinger2_L",
+      "J_Bip_L_Ring2",
+      "F_ring_L_02"
+    ],
+    "LeftRingDistal": [
+      "RingFinger3_L",
+      "J_Bip_L_Ring3",
+      "F_ring_L_03"
+    ],
+    "LeftLittleProximal": [
+      "LittleFinger1_L",
+      "J_Bip_L_Little1",
+      "F_little_L_01"
+    ],
+    "LeftLittleIntermediate": [
+      "LittleFinger2_L",
+      "J_Bip_L_Little2",
+      "F_little_L_02"
+    ],
+    "LeftLittleDistal": [
+      "LittleFinger3_L",
+      "J_Bip_L_Little3",
+      "F_little_L_03"
+    ],
+    "_comment_right_arm": "═══ 오른쪽 팔 (Right Arm Chain) ═══",
+    "RightShoulder": [
+      "Shoulder_R",
+      "J_Bip_R_Shoulder",
+      "Right shoulder",
+      "shoulder.R"
+    ],
+    "RightUpperArm": [
+      "Arm_R",
+      "J_Bip_R_UpperArm",
+      "Right arm",
+      "upper_arm.R"
+    ],
+    "RightLowerArm": [
+      "Elbow_R",
+      "J_Bip_R_LowerArm",
+      "Right elbow",
+      "lower_arm.R"
+    ],
+    "RightHand": [
+      "Wrist_R",
+      "J_Bip_R_Hand",
+      "Right wrist",
+      "hand.R"
+    ],
+    "_comment_right_fingers": "═══ 오른손 손가락 (Right Hand Fingers) ═══",
+    "RightThumbProximal": [
+      "Thumb1_R",
+      "J_Bip_R_Thumb1",
+      "ThumbFinger1_R"
+    ],
+    "RightThumbIntermediate": [
+      "Thumb2_R",
+      "J_Bip_R_Thumb2",
+      "ThumbFinger2_R"
+    ],
+    "RightThumbDistal": [
+      "Thumb3_R",
+      "J_Bip_R_Thumb3",
+      "ThumbFinger3_R"
+    ],
+    "RightIndexProximal": [
+      "IndexFinger1_R",
+      "J_Bip_R_Index1",
+      "F_index_R_01"
+    ],
+    "RightIndexIntermediate": [
+      "IndexFinger2_R",
+      "J_Bip_R_Index2",
+      "F_index_R_02"
+    ],
+    "RightIndexDistal": [
+      "IndexFinger3_R",
+      "J_Bip_R_Index3",
+      "F_index_R_03"
+    ],
+    "RightMiddleProximal": [
+      "MiddleFinger1_R",
+      "J_Bip_R_Middle1",
+      "F_middle_R_01"
+    ],
+    "RightMiddleIntermediate": [
+      "MiddleFinger2_R",
+      "J_Bip_R_Middle2",
+      "F_middle_R_02"
+    ],
+    "RightMiddleDistal": [
+      "MiddleFinger3_R",
+      "J_Bip_R_Middle3",
+      "F_middle_R_03"
+    ],
+    "RightRingProximal": [
+      "RingFinger1_R",
+      "J_Bip_R_Ring1",
+      "F_ring_R_01"
+    ],
+    "RightRingIntermediate": [
+      "RingFinger2_R",
+      "J_Bip_R_Ring2",
+      "F_ring_R_02"
+    ],
+    "RightRingDistal": [
+      "RingFinger3_R",
+      "J_Bip_R_Ring3",
+      "F_ring_R_03"
+    ],
+    "RightLittleProximal": [
+      "LittleFinger1_R",
+      "J_Bip_R_Little1",
+      "F_little_R_01"
+    ],
+    "RightLittleIntermediate": [
+      "LittleFinger2_R",
+      "J_Bip_R_Little2",
+      "F_little_R_02"
+    ],
+    "RightLittleDistal": [
+      "LittleFinger3_R",
+      "J_Bip_R_Little3",
+      "F_little_R_03"
+    ],
+    "_comment_left_leg": "═══ 왼쪽 다리 (Left Leg Chain) ═══",
+    "LeftUpperLeg": [
+      "Leg_L",
+      "J_Bip_L_UpperLeg",
+      "Left leg",
+      "upper_leg.L"
+    ],
+    "LeftLowerLeg": [
+      "Knee_L",
+      "J_Bip_L_LowerLeg",
+      "Left knee",
+      "lower_leg.L"
+    ],
+    "LeftFoot": [
+      "Ankle_L",
+      "J_Bip_L_Foot",
+      "Left ankle",
+      "foot.L"
+    ],
+    "LeftToes": [
+      "Toe_L",
+      "J_Bip_L_ToeBase",
+      "Left toe",
+      "toes.L"
+    ],
+    "_comment_right_leg": "═══ 오른쪽 다리 (Right Leg Chain) ═══",
+    "RightUpperLeg": [
+      "Leg_R",
+      "J_Bip_R_UpperLeg",
+      "Right leg",
+      "upper_leg.R"
+    ],
+    "RightLowerLeg": [
+      "Knee_R",
+      "J_Bip_R_LowerLeg",
+      "Right knee",
+      "lower_leg.R"
+    ],
+    "RightFoot": [
+      "Ankle_R",
+      "J_Bip_R_Foot",
+      "Right ankle",
+      "foot.R"
+    ],
+    "RightToes": [
+      "Toe_R",
+      "J_Bip_R_ToeBase",
+      "Right toe",
+      "toes.R"
+    ],
+    "_comment_eyes": "═══ 눈 (Eye Bones) ═══",
+    "LeftEye": [
+      "Eye_L",
+      "J_Bip_L_Eye",
+      "eye.L"
+    ],
+    "RightEye": [
+      "Eye_R",
+      "J_Bip_R_Eye",
+      "eye.R"
+    ]
+  },
+  "_comment_blendshapes": "TODO: 아바타별 BlendShape 키 이름 확인 필요",
+  "blendShapeMap": {},
+  "_comment_physics": "TODO: Dynamic Bone / PhysBone / Magica Cloth 설정 추출 필요",
+  "physicsConfig": {},
+  "_comment_materials": "TODO: 아바타별 머티리얼 이름과 프로퍼티 매핑 필요",
+  "materialConfig": {}
+}

@@ -1,0 +1,190 @@
+{
+  "avatarId": "manuka",
+  "displayName": "マヌカ (Manuka)",
+  "displayNameKo": "마누카",
+  "boothUrl": "https://booth.pm/ja/items/4156014",
+  "version": "1.0.0",
+  "creator": "まめひなた",
+  "armatureRoot": "Armature",
+
+  "_comment_boneMap": "본 매핑 대응표 — key: Unity HumanBodyBones 표준명, value: 마누카 아바타에서 사용되는 본 이름 후보 배열. 의상 측 본과 매칭 시 앞쪽 항목이 우선.",
+
+  "boneMap": {
+    "_comment_spine": "═══ 척추/몸통 (Spine Chain) ═══",
+    "Hips": ["Hips", "J_Bip_C_Hips", "hip"],
+    "Spine": ["Spine", "J_Bip_C_Spine", "spine"],
+    "Chest": ["Chest", "J_Bip_C_Chest", "chest"],
+    "UpperChest": ["Upper_Chest", "J_Bip_C_UpperChest", "Upper Chest", "upper_chest"],
+    "Neck": ["Neck", "J_Bip_C_Neck", "neck"],
+    "Head": ["Head", "J_Bip_C_Head", "head"],
+
+    "_comment_left_arm": "═══ 왼쪽 팔 (Left Arm Chain) ═══",
+    "LeftShoulder": ["Shoulder_L", "J_Bip_L_Shoulder", "Left shoulder", "shoulder.L"],
+    "LeftUpperArm": ["Arm_L", "J_Bip_L_UpperArm", "Left arm", "upper_arm.L"],
+    "LeftLowerArm": ["Elbow_L", "J_Bip_L_LowerArm", "Left elbow", "lower_arm.L"],
+    "LeftHand": ["Wrist_L", "J_Bip_L_Hand", "Left wrist", "hand.L"],
+
+    "_comment_left_fingers": "═══ 왼손 손가락 (Left Hand Fingers) ═══",
+    "LeftThumbProximal": ["Thumb1_L", "J_Bip_L_Thumb1", "ThumbFinger1_L"],
+    "LeftThumbIntermediate": ["Thumb2_L", "J_Bip_L_Thumb2", "ThumbFinger2_L"],
+    "LeftThumbDistal": ["Thumb3_L", "J_Bip_L_Thumb3", "ThumbFinger3_L"],
+    "LeftIndexProximal": ["IndexFinger1_L", "J_Bip_L_Index1", "F_index_L_01"],
+    "LeftIndexIntermediate": ["IndexFinger2_L", "J_Bip_L_Index2", "F_index_L_02"],
+    "LeftIndexDistal": ["IndexFinger3_L", "J_Bip_L_Index3", "F_index_L_03"],
+    "LeftMiddleProximal": ["MiddleFinger1_L", "J_Bip_L_Middle1", "F_middle_L_01"],
+    "LeftMiddleIntermediate": ["MiddleFinger2_L", "J_Bip_L_Middle2", "F_middle_L_02"],
+    "LeftMiddleDistal": ["MiddleFinger3_L", "J_Bip_L_Middle3", "F_middle_L_03"],
+    "LeftRingProximal": ["RingFinger1_L", "J_Bip_L_Ring1", "F_ring_L_01"],
+    "LeftRingIntermediate": ["RingFinger2_L", "J_Bip_L_Ring2", "F_ring_L_02"],
+    "LeftRingDistal": ["RingFinger3_L", "J_Bip_L_Ring3", "F_ring_L_03"],
+    "LeftLittleProximal": ["LittleFinger1_L", "J_Bip_L_Little1", "F_little_L_01"],
+    "LeftLittleIntermediate": ["LittleFinger2_L", "J_Bip_L_Little2", "F_little_L_02"],
+    "LeftLittleDistal": ["LittleFinger3_L", "J_Bip_L_Little3", "F_little_L_03"],
+
+    "_comment_right_arm": "═══ 오른쪽 팔 (Right Arm Chain) ═══",
+    "RightShoulder": ["Shoulder_R", "J_Bip_R_Shoulder", "Right shoulder", "shoulder.R"],
+    "RightUpperArm": ["Arm_R", "J_Bip_R_UpperArm", "Right arm", "upper_arm.R"],
+    "RightLowerArm": ["Elbow_R", "J_Bip_R_LowerArm", "Right elbow", "lower_arm.R"],
+    "RightHand": ["Wrist_R", "J_Bip_R_Hand", "Right wrist", "hand.R"],
+
+    "_comment_right_fingers": "═══ 오른손 손가락 (Right Hand Fingers) ═══",
+    "RightThumbProximal": ["Thumb1_R", "J_Bip_R_Thumb1", "ThumbFinger1_R"],
+    "RightThumbIntermediate": ["Thumb2_R", "J_Bip_R_Thumb2", "ThumbFinger2_R"],
+    "RightThumbDistal": ["Thumb3_R", "J_Bip_R_Thumb3", "ThumbFinger3_R"],
+    "RightIndexProximal": ["IndexFinger1_R", "J_Bip_R_Index1", "F_index_R_01"],
+    "RightIndexIntermediate": ["IndexFinger2_R", "J_Bip_R_Index2", "F_index_R_02"],
+    "RightIndexDistal": ["IndexFinger3_R", "J_Bip_R_Index3", "F_index_R_03"],
+    "RightMiddleProximal": ["MiddleFinger1_R", "J_Bip_R_Middle1", "F_middle_R_01"],
+    "RightMiddleIntermediate": ["MiddleFinger2_R", "J_Bip_R_Middle2", "F_middle_R_02"],
+    "RightMiddleDistal": ["MiddleFinger3_R", "J_Bip_R_Middle3", "F_middle_R_03"],
+    "RightRingProximal": ["RingFinger1_R", "J_Bip_R_Ring1", "F_ring_R_01"],
+    "RightRingIntermediate": ["RingFinger2_R", "J_Bip_R_Ring2", "F_ring_R_02"],
+    "RightRingDistal": ["RingFinger3_R", "J_Bip_R_Ring3", "F_ring_R_03"],
+    "RightLittleProximal": ["LittleFinger1_R", "J_Bip_R_Little1", "F_little_R_01"],
+    "RightLittleIntermediate": ["LittleFinger2_R", "J_Bip_R_Little2", "F_little_R_02"],
+    "RightLittleDistal": ["LittleFinger3_R", "J_Bip_R_Little3", "F_little_R_03"],
+
+    "_comment_left_leg": "═══ 왼쪽 다리 (Left Leg Chain) ═══",
+    "LeftUpperLeg": ["Leg_L", "J_Bip_L_UpperLeg", "Left leg", "upper_leg.L"],
+    "LeftLowerLeg": ["Knee_L", "J_Bip_L_LowerLeg", "Left knee", "lower_leg.L"],
+    "LeftFoot": ["Ankle_L", "J_Bip_L_Foot", "Left ankle", "foot.L"],
+    "LeftToes": ["Toe_L", "J_Bip_L_ToeBase", "Left toe", "toes.L"],
+
+    "_comment_right_leg": "═══ 오른쪽 다리 (Right Leg Chain) ═══",
+    "RightUpperLeg": ["Leg_R", "J_Bip_R_UpperLeg", "Right leg", "upper_leg.R"],
+    "RightLowerLeg": ["Knee_R", "J_Bip_R_LowerLeg", "Right knee", "lower_leg.R"],
+    "RightFoot": ["Ankle_R", "J_Bip_R_Foot", "Right ankle", "foot.R"],
+    "RightToes": ["Toe_R", "J_Bip_R_ToeBase", "Right toe", "toes.R"],
+
+    "_comment_eyes": "═══ 눈 (Eye Bones) ═══",
+    "LeftEye": ["Eye_L", "J_Bip_L_Eye", "eye.L"],
+    "RightEye": ["Eye_R", "J_Bip_R_Eye", "eye.R"]
+  },
+
+  "_comment_clothing": "의상 대응 식별 키워드 — .unitypackage 경로에서 이 패턴 발견 시 마누카 대응 의상으로 판별",
+  "knownClothingPrefixes": [
+    "manuka_",
+    "Manuka_",
+    "マヌカ_",
+    "マヌカ用",
+    "_manuka",
+    "_Manuka",
+    "For_Manuka",
+    "formanuka",
+    "対応_マヌカ"
+  ],
+
+  "_comment_physBones": "물리 본(PhysBone) 설정 — 마누카의 기본 물리 구조. 헤어, 스커트, 리본 등에 적용",
+  "physBones": {
+    "Hair_Root": {
+      "type": "VRCPhysBone",
+      "affectedBones": 12,
+      "damping": 0.4,
+      "stiffness": 0.2,
+      "gravity": 0.1,
+      "_comment": "전체 헤어 — 부드러운 흔들림, 중력 약간"
+    },
+    "Hair_Front_L": {
+      "type": "VRCPhysBone",
+      "affectedBones": 4,
+      "damping": 0.3,
+      "stiffness": 0.3,
+      "gravity": 0.05,
+      "_comment": "앞머리 왼쪽 — 약간 뻣뻣하게 (얼굴 가리지 않도록)"
+    },
+    "Hair_Front_R": {
+      "type": "VRCPhysBone",
+      "affectedBones": 4,
+      "damping": 0.3,
+      "stiffness": 0.3,
+      "gravity": 0.05,
+      "_comment": "앞머리 오른쪽 — 좌우 대칭"
+    },
+    "Skirt_Root": {
+      "type": "VRCPhysBone",
+      "affectedBones": 8,
+      "damping": 0.5,
+      "stiffness": 0.15,
+      "gravity": 0.2,
+      "_comment": "스커트 — 무게감 있는 흔들림, 중력 강하게"
+    },
+    "Ribbon_L": {
+      "type": "VRCPhysBone",
+      "affectedBones": 3,
+      "damping": 0.2,
+      "stiffness": 0.4,
+      "gravity": 0.1,
+      "_comment": "왼쪽 리본 — 가볍게 흔들림"
+    },
+    "Ribbon_R": {
+      "type": "VRCPhysBone",
+      "affectedBones": 3,
+      "damping": 0.2,
+      "stiffness": 0.4,
+      "gravity": 0.1,
+      "_comment": "오른쪽 리본 — 좌우 대칭"
+    },
+    "Breast_L": {
+      "type": "VRCPhysBone",
+      "affectedBones": 1,
+      "damping": 0.6,
+      "stiffness": 0.5,
+      "gravity": 0.15,
+      "_comment": "가슴 물리 왼쪽 — 댐핑 높게(과도한 흔들림 방지)"
+    },
+    "Breast_R": {
+      "type": "VRCPhysBone",
+      "affectedBones": 1,
+      "damping": 0.6,
+      "stiffness": 0.5,
+      "gravity": 0.15,
+      "_comment": "가슴 물리 오른쪽 — 좌우 대칭"
+    }
+  },
+
+  "_comment_blendShapes": "BlendShape 매핑 — 표정 및 체형 조절용. VRM BlendShapeProxy 표준에 맞춤",
+  "blendShapes": {
+    "visemes": {
+      "vrc.v_aa": "あ",
+      "vrc.v_ih": "い",
+      "vrc.v_ou": "う",
+      "vrc.v_ee": "え",
+      "vrc.v_oh": "お"
+    },
+    "emotions": {
+      "joy": ["笑顔", "smile", "happy"],
+      "angry": ["怒り", "angry"],
+      "sorrow": ["悲しみ", "sad", "sorrow"],
+      "surprise": ["驚き", "surprised"]
+    }
+  },
+
+  "_comment_meshToggle": "의상 착탈 시 숨겨야 할 아바타 메쉬 — 의상 관통 방지용",
+  "meshToggleDefaults": {
+    "_comment": "의상 종류에 따라 비활성화할 아바타 메쉬 목록",
+    "upperBody": ["Body_Upper", "Bra"],
+    "lowerBody": ["Body_Lower", "Underwear"],
+    "fullBody": ["Body_Upper", "Body_Lower", "Bra", "Underwear"],
+    "shoes": ["Shoes_Default", "Socks_Default"]
+  }
+}

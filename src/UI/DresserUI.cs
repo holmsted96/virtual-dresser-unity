@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -82,6 +83,7 @@ namespace VirtualDresser.UI
         private ParseResult _clothingParse;
         private readonly List<string> _sceneMaterials = new();
         private bool _highQualityMode = false;
+        private AvatarConfig _currentAvatarConfig;
 
         // ─── 레이어별 GameObject 참조 (머티리얼 격리에 사용) ───
         private GameObject _avatarGo;
@@ -120,6 +122,137 @@ namespace VirtualDresser.UI
             BindElements();
             SetupDragDrop();
             RenderAvatarSelector();
+
+            // 첫 실행 시 Unity 설치 여부 확인 (Standalone 빌드에서만)
+#if !UNITY_EDITOR
+            CheckUnitySetupAsync();
+#endif
+        }
+
+        // ─── Unity 자동 설치 ───
+
+        private CancellationTokenSource _setupCts;
+
+        private async void CheckUnitySetupAsync()
+        {
+            if (UnitySetupManager.IsUnityInstalled()) return;
+
+            // 설치 안내 UI 표시
+            ShowSetupOverlay();
+        }
+
+        private void ShowSetupOverlay()
+        {
+            // 기존 패널 위에 오버레이 동적 생성
+            var overlay = new VisualElement();
+            overlay.name = "setup-overlay";
+            overlay.style.position   = Position.Absolute;
+            overlay.style.top        = 0; overlay.style.left   = 0;
+            overlay.style.right      = 0; overlay.style.bottom = 0;
+            overlay.style.backgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.92f);
+            overlay.style.justifyContent  = Justify.Center;
+            overlay.style.alignItems      = Align.Center;
+
+            var title = new Label("Warudo 익스포트 설정 필요");
+            title.style.fontSize   = 18;
+            title.style.color      = Color.white;
+            title.style.marginBottom = 12;
+
+            var desc = new Label(
+                $"아바타를 Warudo로 익스포트하려면\n" +
+                $"Unity {UnitySetupManager.UnityVersion}이 필요합니다.\n\n" +
+                $"설치 버튼을 누르면 자동으로 설치됩니다.\n" +
+                $"(약 3~5GB, 10~20분 소요)");
+            desc.style.color      = new Color(0.8f, 0.8f, 0.8f);
+            desc.style.fontSize   = 13;
+            desc.style.whiteSpace = WhiteSpace.Normal;
+            desc.style.unityTextAlign = TextAnchor.MiddleCenter;
+            desc.style.marginBottom   = 20;
+
+            var progressLabel = new Label("");
+            progressLabel.name = "setup-progress-label";
+            progressLabel.style.color      = new Color(0.6f, 1f, 0.6f);
+            progressLabel.style.fontSize   = 11;
+            progressLabel.style.marginBottom = 8;
+            progressLabel.style.whiteSpace = WhiteSpace.Normal;
+            progressLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+
+            var progressBar = new VisualElement();
+            progressBar.style.width           = 300;
+            progressBar.style.height          = 6;
+            progressBar.style.backgroundColor = new Color(0.3f, 0.3f, 0.3f);
+            progressBar.style.marginBottom    = 20;
+            var progressFill = new VisualElement();
+            progressFill.name = "setup-progress-fill";
+            progressFill.style.height          = 6;
+            progressFill.style.width           = Length.Percent(0);
+            progressFill.style.backgroundColor = new Color(0.3f, 0.8f, 0.3f);
+            progressBar.Add(progressFill);
+
+            var installBtn = new Button();
+            installBtn.name = "setup-install-btn";
+            installBtn.text = "Unity 자동 설치 시작";
+            installBtn.style.width  = 220;
+            installBtn.style.height = 40;
+            installBtn.style.fontSize = 14;
+            installBtn.style.backgroundColor = new Color(0.2f, 0.6f, 0.2f);
+            installBtn.style.marginBottom = 8;
+
+            var skipBtn = new Button();
+            skipBtn.text = "나중에 (익스포트 기능 비활성)";
+            skipBtn.style.fontSize = 11;
+            skipBtn.style.color    = new Color(0.5f, 0.5f, 0.5f);
+
+            overlay.Add(title);
+            overlay.Add(desc);
+            overlay.Add(progressLabel);
+            overlay.Add(progressBar);
+            overlay.Add(installBtn);
+            overlay.Add(skipBtn);
+            _root.Add(overlay);
+
+            // 설치 버튼
+            installBtn.RegisterCallback<ClickEvent>(_ =>
+            {
+                installBtn.SetEnabled(false);
+                installBtn.text = "설치 중...";
+                skipBtn.SetEnabled(false);
+
+                _setupCts = new CancellationTokenSource();
+                UnitySetupManager.InstallAsync(
+                    onProgress: (ratio, msg) =>
+                    {
+                        // 백그라운드 스레드 → 메인 스레드
+                        UnityMainThreadDispatcher.Enqueue(() =>
+                        {
+                            progressFill.style.width  = Length.Percent(ratio * 100f);
+                            progressLabel.text = msg;
+                        });
+                    },
+                    onComplete: (success, error) =>
+                    {
+                        UnityMainThreadDispatcher.Enqueue(() =>
+                        {
+                            if (success)
+                            {
+                                _root.Remove(overlay);
+                                SetParseStatus("✅ Unity 설치 완료! 빌드/익스포트 기능을 사용할 수 있습니다.");
+                            }
+                            else
+                            {
+                                progressLabel.text = $"❌ {error}";
+                                installBtn.SetEnabled(true);
+                                installBtn.text = "다시 시도";
+                                skipBtn.SetEnabled(true);
+                            }
+                        });
+                    },
+                    ct: _setupCts.Token
+                );
+            });
+
+            // 건너뛰기 버튼
+            skipBtn.RegisterCallback<ClickEvent>(_ => _root.Remove(overlay));
         }
 
         // ─── UI 요소 바인딩 ───
@@ -206,6 +339,9 @@ namespace VirtualDresser.UI
 
         private void SetupDragDrop()
         {
+            // DragEnterEvent/DragLeaveEvent/DragPerformEvent는 Standalone 빌드 미지원
+            // MVP: 버튼 클릭 방식으로 대체, 에디터에서만 시각 피드백 활성화
+#if UNITY_EDITOR
             _root.RegisterCallback<DragEnterEvent>(e => {
                 _root.AddToClassList("drag-over");
                 e.StopPropagation();
@@ -215,12 +351,11 @@ namespace VirtualDresser.UI
                 _root.RemoveFromClassList("drag-over");
             });
 
-            // Standalone에서 OS 드롭 파일 경로는 네이티브 WM_DROPFILES 처리 필요.
-            // MVP에서는 버튼 클릭 방식(OnOpenFileButtonClicked)으로 대체.
             _root.RegisterCallback<DragPerformEvent>(e => {
                 _root.RemoveFromClassList("drag-over");
                 e.StopPropagation();
             });
+#endif
         }
 
         // ─── 파일 드롭 핸들러 ───
@@ -300,6 +435,15 @@ namespace VirtualDresser.UI
                 go.transform.SetParent(avatarRoot, false);
                 _avatarGo = go;
 
+                // 아바타 config 로드 (boneMap alias 매칭에 사용)
+                _currentAvatarConfig = result.DetectedName != null
+                    ? AvatarConfigLoader.Get(result.DetectedName)
+                    : null;
+                if (_currentAvatarConfig != null)
+                    Debug.Log($"[DresserUI] AvatarConfig 로드: {_currentAvatarConfig.avatarId}");
+                else
+                    Debug.LogWarning($"[DresserUI] AvatarConfig 없음 (DetectedName={result.DetectedName}) — 이름 완전 일치만 사용");
+
                 await MaterialManager.ApplyTexturesAsync(go, result);
                 RegisterMeshGroup("avatar", displayName, go);
                 FocusCameraOnAvatar(go);
@@ -326,8 +470,18 @@ namespace VirtualDresser.UI
 
                 if (avatarRoot != null)
                 {
-                    var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go);
+                    var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
                     Debug.Log($"[DresserUI] 의상 바인딩: {stats}");
+
+                    // 겹치는 별도 메시 자동 숨김 (Nail_foot_*, Toe_* 등)
+                    var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
+                    if (hidden.Count > 0)
+                        Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
+
+                    // 단일 바디 메시 힌트
+                    var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
+                    if (hint != null)
+                        SetParseStatus($"의상 로드 완료: {displayName}\n💡 {hint}");
                 }
 
                 await MaterialManager.ApplyTexturesAsync(go, result);
@@ -355,7 +509,7 @@ namespace VirtualDresser.UI
 
                 if (avatarRoot != null)
                 {
-                    var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go);
+                    var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
                     Debug.Log($"[DresserUI] 헤어 바인딩: {stats}");
                 }
 

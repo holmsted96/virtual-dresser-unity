@@ -1,0 +1,248 @@
+{
+  "avatarId": "mao",
+  "displayName": "マオ (Mao)",
+  "displayNameKo": "마오",
+  "boothUrl": "https://booth.pm/ja/items/4216214",
+  "version": "1.0.9",
+  "creator": "まめひなた",
+  "armatureRoot": "Armature",
+  "_comment_boneMap": "mao.fbx에서 실제 추출한 본 이름 (2026-04-05). CamelCase_L/_R 혼합, Shoulder 본 없음.",
+  "_comment_no_shoulder": "※ 마오는 Shoulder 본이 없음 — Chest → UpperArm 직결 구조",
+  "boneMap": {
+    "_comment_spine": "═══ 척추/몸통 (Spine Chain) ═══",
+    "Hips": [
+      "Hips",
+      "J_Bip_C_Hips",
+      "hip"
+    ],
+    "Spine": [
+      "Spine",
+      "J_Bip_C_Spine",
+      "spine"
+    ],
+    "Chest": [
+      "Chest",
+      "J_Bip_C_Chest",
+      "chest"
+    ],
+    "_comment_upperchest": "※ 마오는 UpperChest 본 없음 — Chest → Neck 직결",
+    "Neck": [
+      "Neck",
+      "J_Bip_C_Neck",
+      "neck"
+    ],
+    "Head": [
+      "Head",
+      "J_Bip_C_Head",
+      "head"
+    ],
+    "_comment_left_arm": "═══ 왼쪽 팔 (Left Arm Chain) — Shoulder 생략 ═══",
+    "LeftUpperArm": [
+      "Upperarm_L",
+      "UpperArm_L",
+      "Left arm",
+      "Upper_arm.L",
+      "Arm_L",
+      "J_Bip_L_UpperArm",
+      "upper_arm.L"
+    ],
+    "LeftLowerArm": [
+      "Lowerarm_L",
+      "LowerArm_L",
+      "Left elbow",
+      "Lower_arm.L",
+      "Elbow_L",
+      "J_Bip_L_LowerArm",
+      "lower_arm.L"
+    ],
+    "LeftHand": [
+      "Left Hand",
+      "Hand_L",
+      "Left wrist",
+      "Hand.L",
+      "Wrist_L",
+      "J_Bip_L_Hand",
+      "hand.L"
+    ],
+    "_comment_left_fingers": "═══ 왼손 손가락 — 엄지만 본 존재 ═══",
+    "LeftThumbProximal": [
+      "Thumb Proximal_L",
+      "ThumbProximal_L",
+      "Thumb_Proximal_L",
+      "Thumb Proximal.L",
+      "Thumb1_L",
+      "J_Bip_L_Thumb1"
+    ],
+    "LeftThumbIntermediate": [
+      "Thumb Intermediate_L",
+      "ThumbIntermediate_L",
+      "Thumb_Intermediate_L",
+      "Thumb Intermediate.L",
+      "Thumb2_L",
+      "J_Bip_L_Thumb2"
+    ],
+    "LeftThumbDistal": [
+      "Thumb Distal_L",
+      "ThumbDistal_L",
+      "Thumb_Distal_L",
+      "Thumb Distal.L",
+      "Thumb3_L",
+      "J_Bip_L_Thumb3"
+    ],
+    "_comment_right_arm": "═══ 오른쪽 팔 (Right Arm Chain) — Shoulder 생략 ═══",
+    "RightUpperArm": [
+      "Upperarm_R",
+      "UpperArm_R",
+      "Right arm",
+      "Upper_arm.R",
+      "Arm_R",
+      "J_Bip_R_UpperArm",
+      "upper_arm.R"
+    ],
+    "RightLowerArm": [
+      "Lowerarm_R",
+      "LowerArm_R",
+      "Right elbow",
+      "Lower_arm.R",
+      "Elbow_R",
+      "J_Bip_R_LowerArm",
+      "lower_arm.R"
+    ],
+    "RightHand": [
+      "Right Hand",
+      "Hand_R",
+      "Right wrist",
+      "Hand.R",
+      "Wrist_R",
+      "J_Bip_R_Hand",
+      "hand.R"
+    ],
+    "_comment_right_fingers": "═══ 오른손 손가락 — 엄지만 본 존재 ═══",
+    "RightThumbProximal": [
+      "Thumb Proximal_R",
+      "ThumbProximal_R",
+      "Thumb_Proximal_R",
+      "Thumb Proximal.R",
+      "Thumb1_R",
+      "J_Bip_R_Thumb1"
+    ],
+    "RightThumbIntermediate": [
+      "Thumb Intermediate_R",
+      "ThumbIntermediate_R",
+      "Thumb_Intermediate_R",
+      "Thumb Intermediate.R",
+      "Thumb2_R",
+      "J_Bip_R_Thumb2"
+    ],
+    "RightThumbDistal": [
+      "Thumb Distal_R",
+      "ThumbDistal_R",
+      "Thumb_Distal_R",
+      "Thumb Distal.R",
+      "Thumb3_R",
+      "J_Bip_R_Thumb3"
+    ],
+    "_comment_left_leg": "═══ 왼쪽 다리 (Left Leg Chain) ═══",
+    "LeftUpperLeg": [
+      "Upperleg_L",
+      "UpperLeg_L",
+      "Left leg",
+      "Upper_leg.L",
+      "Leg_L",
+      "J_Bip_L_UpperLeg",
+      "upper_leg.L"
+    ],
+    "LeftLowerLeg": [
+      "Lowerleg_L",
+      "LowerLeg_L",
+      "Left knee",
+      "Lower_leg.L",
+      "Knee_L",
+      "J_Bip_L_LowerLeg",
+      "lower_leg.L"
+    ],
+    "LeftFoot": [
+      "Foot_L",
+      "Left ankle",
+      "Foot.L",
+      "Ankle_L",
+      "J_Bip_L_Foot",
+      "foot.L"
+    ],
+    "LeftToes": [
+      "Toe_L",
+      "Left Toe",
+      "Toe.L",
+      "J_Bip_L_ToeBase",
+      "toes.L"
+    ],
+    "_comment_right_leg": "═══ 오른쪽 다리 (Right Leg Chain) ═══",
+    "RightUpperLeg": [
+      "Upperleg_R",
+      "UpperLeg_R",
+      "Right leg",
+      "Upper_leg.R",
+      "Leg_R",
+      "J_Bip_R_UpperLeg",
+      "upper_leg.R"
+    ],
+    "RightLowerLeg": [
+      "Lowerleg_R",
+      "LowerLeg_R",
+      "Right knee",
+      "Lower_leg.R",
+      "Knee_R",
+      "J_Bip_R_LowerLeg",
+      "lower_leg.R"
+    ],
+    "RightFoot": [
+      "Foot_R",
+      "Right ankle",
+      "Foot.R",
+      "Ankle_R",
+      "J_Bip_R_Foot",
+      "foot.R"
+    ],
+    "RightToes": [
+      "Toe_R",
+      "Right Toe",
+      "Toe.R",
+      "J_Bip_R_ToeBase",
+      "toes.R"
+    ],
+    "_comment_eyes": "═══ 눈 (Eye Bones) ═══",
+    "LeftEye": [
+      "eye_L",
+      "Eye_L",
+      "LeftEye",
+      "J_Bip_L_Eye",
+      "eye.L"
+    ],
+    "RightEye": [
+      "eye_R",
+      "Eye_R",
+      "RightEye",
+      "J_Bip_R_Eye",
+      "eye.R"
+    ]
+  },
+  "_comment_extra_bones": "═══ 마오 고유 추가 본 ═══",
+  "extraBones": {
+    "Z_LowerArm_twist_L/R": "전완 트위스트 보정 본",
+    "Z_UpperArm_twist_L/R": "상완 트위스트 보정 본",
+    "Z_knees_L/R": "무릎 보정 본",
+    "Spine.002~004outer_L/R": "스커트/의상 물리 본 체인",
+    "z_chest_string_L/R": "가슴 끈 물리 본",
+    "Forehead_back": "이마 체형 조절 본",
+    "Neck_Long_": "목 길이 조절 본",
+    "necklace/neckless": "목걸이 물리 본 체인",
+    "hip_narrow/hip_up": "힙 체형 조절 본",
+    "chest_ru/chest_under_narrow": "가슴 체형 조절 본"
+  },
+  "_comment_blendshapes": "TODO: 아바타별 BlendShape 키 이름 확인 필요",
+  "blendShapeMap": {},
+  "_comment_physics": "마오 물리 본: Spine.00x_outer (스커트), z_chest_string (가슴끈), neckless (목걸이)",
+  "physicsConfig": {},
+  "_comment_materials": "TODO: 아바타별 머티리얼 이름과 프로퍼티 매핑 필요",
+  "materialConfig": {}
+}

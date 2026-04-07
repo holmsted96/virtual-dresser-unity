@@ -55,17 +55,42 @@ namespace VirtualDresser.Runtime
         /// </summary>
         public static CombineStats BindClothingToAvatar(
             Transform avatarRoot,
-            GameObject clothingGo)
+            GameObject clothingGo,
+            AvatarConfig avatarConfig = null)
         {
             // ── 1. 아바타 본 이름 → Transform 인덱스 구축 ──
             var avatarBoneByName = new Dictionary<string, Transform>(StringComparer.Ordinal);
             CollectBones(avatarRoot, avatarBoneByName);
             Debug.Log($"[MeshCombiner] 아바타 본 {avatarBoneByName.Count}개 인덱싱");
 
+            // ── 2. AvatarConfig boneMap → alias 역방향 맵 구축 ──
+            // alias → 아바타 실제 본 Transform
+            // 예: "J_Bip_L_Shoulder", "Shoulder_L" → 아바타의 "Shoulder.L" Transform
+            var aliasMap = new Dictionary<string, Transform>(StringComparer.OrdinalIgnoreCase);
+            if (avatarConfig?.boneMap != null)
+            {
+                foreach (var (humanoidKey, aliases) in avatarConfig.boneMap)
+                {
+                    if (humanoidKey.StartsWith("_comment") || aliases == null) continue;
+
+                    // aliases 중 아바타에 실제 존재하는 본 찾기
+                    Transform resolvedBone = null;
+                    foreach (var alias in aliases)
+                        if (avatarBoneByName.TryGetValue(alias, out resolvedBone)) break;
+
+                    if (resolvedBone == null) continue;
+
+                    // 모든 alias → 같은 아바타 본으로 연결
+                    foreach (var alias in aliases)
+                        aliasMap.TryAdd(alias, resolvedBone);
+                }
+                Debug.Log($"[MeshCombiner] boneMap alias {aliasMap.Count}개 구축 (config: {avatarConfig.avatarId})");
+            }
+
             var stats = new CombineStats();
             var boneNameSet = new HashSet<string>();
 
-            // ── 2. 의상의 모든 SkinnedMeshRenderer 순회 ──
+            // ── 3. 의상의 모든 SkinnedMeshRenderer 순회 ──
             foreach (var smr in clothingGo.GetComponentsInChildren<SkinnedMeshRenderer>(true))
             {
                 var oldBones = smr.bones;
@@ -89,7 +114,13 @@ namespace VirtualDresser.Runtime
 
                     if (avatarBoneByName.TryGetValue(boneName, out var avatarBone))
                     {
-                        // ★ 동명 아바타 본으로 교체
+                        // ★ 1순위: 이름 완전 일치
+                        newBones[i] = avatarBone;
+                        remapped++;
+                    }
+                    else if (aliasMap.TryGetValue(boneName, out avatarBone))
+                    {
+                        // ★ 2순위: boneMap alias 매칭
                         newBones[i] = avatarBone;
                         remapped++;
                     }
@@ -129,6 +160,85 @@ namespace VirtualDresser.Runtime
 
             Debug.Log($"[MeshCombiner] 바인딩 완료 — {stats}");
             return stats;
+        }
+
+        // ─── 의상 착용 시 아바타 메시 자동 숨김 ───
+
+        // 의상 키워드 → 숨길 아바타 메시 키워드 매핑
+        private static readonly (string[] clothingKeys, string[] hideKeys)[] AutoHideRules =
+        {
+            // 신발/부츠 → 발톱, 발가락 메시 숨김
+            (new[]{ "shoe", "boot", "heel", "sandal", "socks", "sock", "stocking" },
+             new[]{ "nail_foot", "toe_", "toe " }),
+
+            // 장갑 → 손톱 메시 숨김
+            (new[]{ "glove", "gauntlet" },
+             new[]{ "nail_hand" }),
+        };
+
+        /// <summary>
+        /// 의상 메시 이름 기반으로 아바타의 겹치는 별도 메시 자동 숨김.
+        /// (예: 신발 착용 시 Nail_foot_*, Toe_* 자동 숨김)
+        /// 단일 바디 메시(Shinano_body 등)는 숨기지 않음 → UI 힌트로 안내.
+        /// </summary>
+        /// <returns>숨긴 메시 이름 목록 (UI 힌트용)</returns>
+        public static List<string> AutoHideOverlappingMeshes(
+            Transform avatarRoot, GameObject clothingGo)
+        {
+            var hidden = new List<string>();
+
+            // 의상 메시 이름 수집
+            var clothingNames = new List<string>();
+            foreach (var smr in clothingGo.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                clothingNames.Add(smr.name.ToLowerInvariant());
+
+            // 각 룰 적용
+            foreach (var (clothingKeys, hideKeys) in AutoHideRules)
+            {
+                // 이 룰의 의상 키워드가 하나라도 매칭되는지
+                bool clothingMatched = clothingNames.Exists(
+                    n => System.Array.Exists(clothingKeys, k => n.Contains(k)));
+                if (!clothingMatched) continue;
+
+                // 숨길 아바타 메시 탐색
+                foreach (var smr in avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                {
+                    var lower = smr.name.ToLowerInvariant();
+                    if (System.Array.Exists(hideKeys, k => lower.Contains(k)))
+                    {
+                        smr.gameObject.SetActive(false);
+                        hidden.Add(smr.name);
+                        Debug.Log($"[MeshCombiner] 자동 숨김: {smr.name}");
+                    }
+                }
+            }
+
+            return hidden;
+        }
+
+        /// <summary>
+        /// 신발 착용 시 단일 바디 메시 여부 감지 → UI 힌트 문자열 반환.
+        /// 단일 바디 메시(whole-body)가 있으면 힌트 반환, 없으면 null.
+        /// </summary>
+        public static string GetBodyMeshHint(Transform avatarRoot, GameObject clothingGo)
+        {
+            var shoeKeywords = new[] { "shoe", "boot", "heel", "sandal", "socks", "sock" };
+            bool hasShoe = false;
+            foreach (var smr in clothingGo.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                if (System.Array.Exists(shoeKeywords, k => smr.name.ToLowerInvariant().Contains(k)))
+                { hasShoe = true; break; }
+
+            if (!hasShoe) return null;
+
+            // 전신 바디 메시 탐색 (body 키워드 + 정점 수 많음)
+            foreach (var smr in avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var lower = smr.name.ToLowerInvariant();
+                if ((lower.Contains("body") || lower.Contains("skin")) && smr.gameObject.activeSelf
+                    && smr.sharedMesh != null && smr.sharedMesh.vertexCount > 5000)
+                    return $"발이 신발을 뚫고 보이면 메시 패널에서 '{smr.name}'을 숨겨주세요.";
+            }
+            return null;
         }
 
         // ─── 스케일 자동 매칭 ───

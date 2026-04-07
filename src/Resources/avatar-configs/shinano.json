@@ -1,0 +1,258 @@
+{
+  "avatarId": "shinano",
+  "displayName": "シナノ (Shinano)",
+  "displayNameKo": "시나노",
+  "boothUrl": "https://booth.pm/ja/items/4539578",
+  "version": "1.02",
+  "creator": "まめひなた",
+  "armatureRoot": "Armature",
+  "_comment_boneMap": "Shinano.fbx에서 실제 추출한 본 이름 (2026-04-05). Blender 스타일 (.L/.R 도트 구분자).",
+  "boneMap": {
+    "_comment_spine": "═══ 척추/몸통 (Spine Chain) ═══",
+    "Hips": [
+      "Hips",
+      "J_Bip_C_Hips",
+      "hip"
+    ],
+    "Spine": [
+      "Spine",
+      "J_Bip_C_Spine",
+      "spine"
+    ],
+    "Chest": [
+      "Chest",
+      "J_Bip_C_Chest",
+      "chest"
+    ],
+    "_comment_upperchest": "※ 시나노는 UpperChest 본 없음 — Chest → Neck 직결",
+    "Neck": [
+      "Neck",
+      "J_Bip_C_Neck",
+      "neck"
+    ],
+    "Head": [
+      "Head",
+      "J_Bip_C_Head",
+      "head"
+    ],
+    "_comment_left_arm": "═══ 왼쪽 팔 (Left Arm Chain) ═══",
+    "LeftShoulder": [
+      "Shoulder.L",
+      "Shoulder_L",
+      "Left shoulder",
+      "J_Bip_L_Shoulder",
+      "shoulder.L"
+    ],
+    "LeftUpperArm": [
+      "Upper_arm.L",
+      "UpperArm_L",
+      "Left arm",
+      "Arm_L",
+      "J_Bip_L_UpperArm",
+      "upper_arm.L"
+    ],
+    "LeftLowerArm": [
+      "Lower_arm.L",
+      "LowerArm_L",
+      "Left elbow",
+      "Elbow_L",
+      "J_Bip_L_LowerArm",
+      "lower_arm.L"
+    ],
+    "LeftHand": [
+      "Hand.L",
+      "Hand_L",
+      "Left wrist",
+      "Left Hand",
+      "Wrist_L",
+      "J_Bip_L_Hand",
+      "hand.L"
+    ],
+    "_comment_left_fingers": "═══ 왼손 손가락 — 엄지만 본 존재 ═══",
+    "LeftThumbProximal": [
+      "Thumb Proximal.L",
+      "ThumbProximal_L",
+      "Thumb_Proximal_L",
+      "Thumb Proximal_L",
+      "Thumb1_L",
+      "J_Bip_L_Thumb1"
+    ],
+    "LeftThumbIntermediate": [
+      "Thumb Intermediate.L",
+      "ThumbIntermediate_L",
+      "Thumb_Intermediate_L",
+      "Thumb Intermediate_L",
+      "Thumb2_L",
+      "J_Bip_L_Thumb2"
+    ],
+    "LeftThumbDistal": [
+      "Thumb Distal.L",
+      "ThumbDistal_L",
+      "Thumb_Distal_L",
+      "Thumb Distal_L",
+      "Thumb3_L",
+      "J_Bip_L_Thumb3"
+    ],
+    "_comment_right_arm": "═══ 오른쪽 팔 (Right Arm Chain) ═══",
+    "RightShoulder": [
+      "Shoulder.R",
+      "Shoulder_R",
+      "Right shoulder",
+      "J_Bip_R_Shoulder",
+      "shoulder.R"
+    ],
+    "RightUpperArm": [
+      "Upper_arm.R",
+      "UpperArm_R",
+      "Right arm",
+      "Arm_R",
+      "J_Bip_R_UpperArm",
+      "upper_arm.R"
+    ],
+    "RightLowerArm": [
+      "Lower_arm.R",
+      "LowerArm_R",
+      "Right elbow",
+      "Elbow_R",
+      "J_Bip_R_LowerArm",
+      "lower_arm.R"
+    ],
+    "RightHand": [
+      "Hand.R",
+      "Hand_R",
+      "Right wrist",
+      "Right Hand",
+      "Wrist_R",
+      "J_Bip_R_Hand",
+      "hand.R"
+    ],
+    "_comment_right_fingers": "═══ 오른손 손가락 — 엄지만 본 존재 ═══",
+    "RightThumbProximal": [
+      "Thumb Proximal.R",
+      "ThumbProximal_R",
+      "Thumb_Proximal_R",
+      "Thumb Proximal_R",
+      "Thumb1_R",
+      "J_Bip_R_Thumb1"
+    ],
+    "RightThumbIntermediate": [
+      "Thumb Intermediate.R",
+      "ThumbIntermediate_R",
+      "Thumb_Intermediate_R",
+      "Thumb Intermediate_R",
+      "Thumb2_R",
+      "J_Bip_R_Thumb2"
+    ],
+    "RightThumbDistal": [
+      "Thumb Distal.R",
+      "ThumbDistal_R",
+      "Thumb_Distal_R",
+      "Thumb Distal_R",
+      "Thumb3_R",
+      "J_Bip_R_Thumb3"
+    ],
+    "_comment_left_leg": "═══ 왼쪽 다리 (Left Leg Chain) ═══",
+    "LeftUpperLeg": [
+      "Upper_leg.L",
+      "UpperLeg_L",
+      "Upperleg_L",
+      "Left leg",
+      "Leg_L",
+      "J_Bip_L_UpperLeg",
+      "upper_leg.L"
+    ],
+    "LeftLowerLeg": [
+      "Lower_leg.L",
+      "LowerLeg_L",
+      "Lowerleg_L",
+      "Left knee",
+      "Knee_L",
+      "J_Bip_L_LowerLeg",
+      "lower_leg.L"
+    ],
+    "LeftFoot": [
+      "Foot.L",
+      "Foot_L",
+      "Left ankle",
+      "Ankle_L",
+      "J_Bip_L_Foot",
+      "foot.L"
+    ],
+    "LeftToes": [
+      "Toe.L",
+      "Toe_L",
+      "Left Toe",
+      "J_Bip_L_ToeBase",
+      "toes.L"
+    ],
+    "_comment_right_leg": "═══ 오른쪽 다리 (Right Leg Chain) ═══",
+    "RightUpperLeg": [
+      "Upper_leg.R",
+      "UpperLeg_R",
+      "Upperleg_R",
+      "Right leg",
+      "Leg_R",
+      "J_Bip_R_UpperLeg",
+      "upper_leg.R"
+    ],
+    "RightLowerLeg": [
+      "Lower_leg.R",
+      "LowerLeg_R",
+      "Lowerleg_R",
+      "Right knee",
+      "Knee_R",
+      "J_Bip_R_LowerLeg",
+      "lower_leg.R"
+    ],
+    "RightFoot": [
+      "Foot.R",
+      "Foot_R",
+      "Right ankle",
+      "Ankle_R",
+      "J_Bip_R_Foot",
+      "foot.R"
+    ],
+    "RightToes": [
+      "Toe.R",
+      "Toe_R",
+      "Right Toe",
+      "J_Bip_R_ToeBase",
+      "toes.R"
+    ],
+    "_comment_eyes": "═══ 눈 (Eye Bones) ═══",
+    "LeftEye": [
+      "LeftEye",
+      "Eye_L",
+      "eye_L",
+      "Eye look L",
+      "J_Bip_L_Eye",
+      "eye.L"
+    ],
+    "RightEye": [
+      "RightEye",
+      "Eye_R",
+      "eye_R",
+      "Eye look R",
+      "J_Bip_R_Eye",
+      "eye.R"
+    ]
+  },
+  "_comment_extra_bones": "═══ 시나노 고유 추가 본 ═══",
+  "extraBones": {
+    "Upper_arm_support.L/R": "상완 IK 보조 본",
+    "Lower_arm_support.L/R": "전완 IK 보조 본",
+    "Shrink_Chest1/2": "가슴 체형 조절 본",
+    "Shrink_Hip1~4 / Hip_all": "힙 체형 조절 본",
+    "Shrink_Neck1~3": "목 체형 조절 본",
+    "Shrink_Spine_1/2": "척추 체형 조절 본",
+    "Shrink_Ankle/Elbow/Foot/Knees": "사지 체형 조절 본",
+    "Shrink_Upper_arm/Low_arm/hand/wrist": "팔 체형 조절 본",
+    "Shrink_Shoulder/Upper_leg1/2/Lower_leg": "어깨/다리 체형 조절 본"
+  },
+  "_comment_blendshapes": "시나노는 본 기반 표정 시스템 (489개 표정 본: eye_*, eyebrow_*, eyelash_*, eyelid_*)",
+  "blendShapeMap": {},
+  "_comment_physics": "TODO: Dynamic Bone / PhysBone 설정 추출 필요",
+  "physicsConfig": {},
+  "_comment_materials": "TODO: 아바타별 머티리얼 이름과 프로퍼티 매핑 필요",
+  "materialConfig": {}
+}

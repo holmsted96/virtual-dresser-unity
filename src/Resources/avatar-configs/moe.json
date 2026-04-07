@@ -1,0 +1,234 @@
+{
+  "avatarId": "moe",
+  "displayName": "モエ (Moe)",
+  "displayNameKo": "모에",
+  "boothUrl": "https://booth.pm/ja/items/4108136",
+  "version": "1.02.1",
+  "creator": "まめひなた",
+  "armatureRoot": "Armature",
+  "_comment_boneMap": "FBX_Moe.fbx에서 실제 추출한 본 이름 (2026-04-05). Unity Humanoid 스타일 (Left/Right + 띄어쓰기).",
+  "boneMap": {
+    "_comment_spine": "═══ 척추/몸통 (Spine Chain) ═══",
+    "Hips": [
+      "Hips",
+      "J_Bip_C_Hips",
+      "hip"
+    ],
+    "Spine": [
+      "Spine",
+      "J_Bip_C_Spine",
+      "spine"
+    ],
+    "Chest": [
+      "Chest",
+      "J_Bip_C_Chest",
+      "chest"
+    ],
+    "_comment_upperchest": "※ 모에는 UpperChest 본 없음 — Chest → Neck 직결",
+    "Neck": [
+      "Neck",
+      "J_Bip_C_Neck",
+      "neck"
+    ],
+    "Head": [
+      "Head",
+      "J_Bip_C_Head",
+      "head"
+    ],
+    "_comment_left_arm": "═══ 왼쪽 팔 (Left Arm Chain) ═══",
+    "LeftShoulder": [
+      "Left shoulder",
+      "Shoulder.L",
+      "Shoulder_L",
+      "J_Bip_L_Shoulder",
+      "shoulder.L"
+    ],
+    "LeftUpperArm": [
+      "Left arm",
+      "Upper_arm.L",
+      "Arm_L",
+      "J_Bip_L_UpperArm",
+      "upper_arm.L"
+    ],
+    "LeftLowerArm": [
+      "Left elbow",
+      "Lower_arm.L",
+      "Elbow_L",
+      "J_Bip_L_LowerArm",
+      "lower_arm.L"
+    ],
+    "LeftHand": [
+      "Left wrist",
+      "Hand.L",
+      "Wrist_L",
+      "J_Bip_L_Hand",
+      "hand.L"
+    ],
+    "_comment_left_fingers": "═══ 왼손 손가락 — 엄지만 본 존재, 나머지 미검출 ═══",
+    "LeftThumbProximal": [
+      "Thumb_Proximal_L",
+      "Thumb Proximal.L",
+      "Thumb1_L",
+      "J_Bip_L_Thumb1",
+      "ThumbFinger1_L"
+    ],
+    "LeftThumbIntermediate": [
+      "Thumb_Intermediate_L",
+      "Thumb Intermediate.L",
+      "Thumb2_L",
+      "J_Bip_L_Thumb2",
+      "ThumbFinger2_L"
+    ],
+    "LeftThumbDistal": [
+      "Thumb_Distal_L",
+      "Thumb Distal.L",
+      "Thumb3_L",
+      "J_Bip_L_Thumb3",
+      "ThumbFinger3_L"
+    ],
+    "_comment_right_arm": "═══ 오른쪽 팔 (Right Arm Chain) ═══",
+    "RightShoulder": [
+      "Right shoulder",
+      "Shoulder.R",
+      "Shoulder_R",
+      "J_Bip_R_Shoulder",
+      "shoulder.R"
+    ],
+    "RightUpperArm": [
+      "Right arm",
+      "Upper_arm.R",
+      "Arm_R",
+      "J_Bip_R_UpperArm",
+      "upper_arm.R"
+    ],
+    "RightLowerArm": [
+      "Right elbow",
+      "Lower_arm.R",
+      "Elbow_R",
+      "J_Bip_R_LowerArm",
+      "lower_arm.R"
+    ],
+    "RightHand": [
+      "Right wrist",
+      "Hand.R",
+      "Wrist_R",
+      "J_Bip_R_Hand",
+      "hand.R"
+    ],
+    "_comment_right_fingers": "═══ 오른손 손가락 — 엄지만 본 존재 ═══",
+    "RightThumbProximal": [
+      "Thumb_Proximal_R",
+      "Thumb Proximal.R",
+      "Thumb1_R",
+      "J_Bip_R_Thumb1",
+      "ThumbFinger1_R"
+    ],
+    "RightThumbIntermediate": [
+      "Thumb_Intermediate_R",
+      "Thumb Intermediate.R",
+      "Thumb2_R",
+      "J_Bip_R_Thumb2",
+      "ThumbFinger2_R"
+    ],
+    "RightThumbDistal": [
+      "Thumb_Distal_R",
+      "Thumb Distal.R",
+      "Thumb3_R",
+      "J_Bip_R_Thumb3",
+      "ThumbFinger3_R"
+    ],
+    "_comment_left_leg": "═══ 왼쪽 다리 (Left Leg Chain) ═══",
+    "LeftUpperLeg": [
+      "Left leg",
+      "Upper_leg.L",
+      "Leg_L",
+      "J_Bip_L_UpperLeg",
+      "upper_leg.L"
+    ],
+    "LeftLowerLeg": [
+      "Left knee",
+      "Lower_leg.L",
+      "Knee_L",
+      "J_Bip_L_LowerLeg",
+      "lower_leg.L"
+    ],
+    "LeftFoot": [
+      "Left ankle",
+      "Foot.L",
+      "Ankle_L",
+      "J_Bip_L_Foot",
+      "foot.L"
+    ],
+    "LeftToes": [
+      "Left Toe",
+      "Toe.L",
+      "Toe_L",
+      "J_Bip_L_ToeBase",
+      "toes.L"
+    ],
+    "_comment_right_leg": "═══ 오른쪽 다리 (Right Leg Chain) ═══",
+    "RightUpperLeg": [
+      "Right leg",
+      "Upper_leg.R",
+      "Leg_R",
+      "J_Bip_R_UpperLeg",
+      "upper_leg.R"
+    ],
+    "RightLowerLeg": [
+      "Right knee",
+      "Lower_leg.R",
+      "Knee_R",
+      "J_Bip_R_LowerLeg",
+      "lower_leg.R"
+    ],
+    "RightFoot": [
+      "Right ankle",
+      "Foot.R",
+      "Ankle_R",
+      "J_Bip_R_Foot",
+      "foot.R"
+    ],
+    "RightToes": [
+      "Right Toe",
+      "Toe.R",
+      "Toe_R",
+      "J_Bip_R_ToeBase",
+      "toes.R"
+    ],
+    "_comment_eyes": "═══ 눈 (Eye Bones) ═══",
+    "LeftEye": [
+      "Eye_L",
+      "LeftEye",
+      "J_Bip_L_Eye",
+      "eye.L"
+    ],
+    "RightEye": [
+      "Eye_R",
+      "RightEye",
+      "J_Bip_R_Eye",
+      "eye.R"
+    ]
+  },
+  "_comment_extra_bones": "═══ 모에 고유 추가 본 ═══",
+  "extraBones": {
+    "Flower_Head": "머리 꽃 장식 본",
+    "Neck_Ribbon_Root": "목 리본 물리 본 루트",
+    "Neck_Ribbon_L.001~004": "목 리본 왼쪽 체인 (물리)",
+    "Neck_Ribbon_R.001~004": "목 리본 오른쪽 체인 (물리)",
+    "Hips_L": "힙 왼쪽 보조 (장식/물리)",
+    "Hips_R": "힙 오른쪽 보조 (장식/물리)",
+    "Chest1": "체형 조절 보조 1",
+    "Chest2": "체형 조절 보조 2"
+  },
+  "_comment_blendshapes": "TODO: 아바타별 BlendShape 키 이름 확인 필요",
+  "blendShapeMap": {},
+  "_comment_physics": "모에 물리 본: Neck_Ribbon 체인 (PhysBone/Dynamic Bone)",
+  "physicsConfig": {
+    "ribbonChains": [
+      "Neck_Ribbon_L.001 → .002 → .003 → .004",
+      "Neck_Ribbon_R.001 → .002 → .003 → .004"
+    ]
+  },
+  "_comment_materials": "TODO: 아바타별 머티리얼 이름과 프로퍼티 매핑 필요",
+  "materialConfig": {}
+}
