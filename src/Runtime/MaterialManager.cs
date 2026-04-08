@@ -186,26 +186,20 @@ namespace VirtualDresser.Runtime
                 var mat = smr.sharedMaterial;
                 if (mat == null) continue;
 
-                // ── 셰이더 교체 ──
+                // ── 셰이더 교체 (lilToon이 있을 때만) ──
                 var lilShader = GetLilToonShader(smr.name);
                 if (lilShader != null)
                 {
                     if (mat.shader != lilShader)
                         mat.shader = lilShader;
-                    // ★ 교체 후 반드시 기본값 초기화 (_Color 미초기화 시 검정 렌더링)
                     InitLilToonDefaults(mat, lilShader);
                 }
-                else
-                {
-                    // lilToon 미설치 → Standard 셰이더로 폴백 (검정 렌더링 방지)
-                    var std = Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Lit");
-                    if (std != null && mat.shader != std)
-                    {
-                        mat.shader = std;
-                        mat.SetColor("_Color",   Color.white);
-                        mat.SetColor("_BaseColor", Color.white);
-                    }
-                }
+                // lilToon 없으면 TriLib이 설정한 셰이더 그대로 사용
+                // (교체 시 Standalone에서 셰이더 strip으로 메시 완전 비가시 발생)
+
+                // 어떤 셰이더든 _Color / _BaseColor 흰색 보장
+                if (mat.HasProperty("_Color"))    mat.SetColor("_Color",    Color.white);
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
 
                 // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
                 var matchKey = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
