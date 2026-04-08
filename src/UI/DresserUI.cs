@@ -78,6 +78,13 @@ namespace VirtualDresser.UI
         private Label _parseStatusLabel;
         private Button _qualityToggleBtn;
 
+        // ─── 로딩 오버레이 ───
+        private VisualElement _loadingOverlay;
+        private Label _loadingTitle;
+        private Label _loadingStep;
+        private VisualElement _progressFill;
+        private Label _loadingPct;
+
         // ─── 앱 상태 ───
         private ParseResult _avatarParse;
         private ParseResult _clothingParse;
@@ -122,6 +129,7 @@ namespace VirtualDresser.UI
             }
 
             BindElements();
+            CreateLoadingOverlay();
             SetupDragDrop();
             RenderAvatarSelector();
 
@@ -384,7 +392,9 @@ namespace VirtualDresser.UI
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
             if (ext != ".unitypackage" && ext != ".zip") return;
 
-            SetParseStatus($"Parsing: {Path.GetFileName(filePath)}...");
+            var fileName = Path.GetFileName(filePath);
+            SetParseStatus($"Parsing: {fileName}...");
+            ShowLoading("Importing...", $"Parsing {fileName}", 0.05f);
 
             try
             {
@@ -398,10 +408,12 @@ namespace VirtualDresser.UI
                 if (!string.IsNullOrEmpty(forcedType))
                     result.DetectedType = forcedType;
 
+                ShowLoading("Importing...", "Extracting assets...", 0.35f);
                 OnParseComplete(result, filePath);
             }
             catch (Exception e)
             {
+                HideLoading();
                 SetParseStatus($"Error: {e.Message}");
                 Debug.LogError($"[DresserUI] 파싱 실패: {e}");
             }
@@ -440,9 +452,10 @@ namespace VirtualDresser.UI
 
         private async void LoadAvatarFbx(ParseResult result, string displayName)
         {
-            if (result.ExtractedFbxPaths.Count == 0) return;
+            if (result.ExtractedFbxPaths.Count == 0) { HideLoading(); return; }
 
             SetParseStatus($"Loading FBX: {displayName}...");
+            ShowLoading("Importing Avatar", "Loading FBX model...", 0.45f);
             try
             {
                 // 기존 아바타 제거
@@ -450,7 +463,7 @@ namespace VirtualDresser.UI
                     foreach (Transform child in avatarRoot) Destroy(child.gameObject);
 
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("Avatar FBX load failed"); return; }
+                if (go == null) { HideLoading(); SetParseStatus("Avatar FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _avatarGo = go;
 
@@ -463,7 +476,10 @@ namespace VirtualDresser.UI
                 else
                     Debug.LogWarning($"[DresserUI] AvatarConfig 없음 (DetectedName={result.DetectedName}) — 이름 완전 일치만 사용");
 
+                ShowLoading("Importing Avatar", "Applying textures & materials...", 0.70f);
                 await MaterialManager.ApplyTexturesAsync(go, result);
+
+                ShowLoading("Importing Avatar", "Finalizing...", 0.92f);
                 RegisterMeshGroup("avatar", displayName, go);
                 FocusCameraOnAvatar(go);
 
@@ -472,10 +488,12 @@ namespace VirtualDresser.UI
                     _poseController = gameObject.AddComponent<PoseController>();
                 _poseController.SetAvatar(go);
 
+                HideLoading();
                 SetParseStatus($"Avatar loaded: {displayName}");
             }
             catch (Exception e)
             {
+                HideLoading();
                 SetParseStatus($"Avatar load failed: {e.Message}");
                 Debug.LogError($"[DresserUI] Avatar load failed: {e}");
             }
@@ -483,39 +501,45 @@ namespace VirtualDresser.UI
 
         private async void LoadClothingFbx(ParseResult result, string displayName)
         {
-            if (result.ExtractedFbxPaths.Count == 0) return;
+            if (result.ExtractedFbxPaths.Count == 0) { HideLoading(); return; }
 
             SetParseStatus($"Loading clothing: {displayName}...");
+            ShowLoading("Importing Clothing", "Loading FBX model...", 0.45f);
             try
             {
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("Clothing FBX load failed"); return; }
+                if (go == null) { HideLoading(); SetParseStatus("Clothing FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _clothingGo    = go;
                 _clothingParse = result;
 
+                ShowLoading("Importing Clothing", "Binding bones to avatar...", 0.62f);
                 if (avatarRoot != null)
                 {
                     var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
                     Debug.Log($"[DresserUI] 의상 바인딩: {stats}");
 
-                    // 겹치는 별도  meshes 자동 숨김 (Nail_foot_*, Toe_* 등)
                     var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
                     if (hidden.Count > 0)
                         Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
 
-                    // 단일 바디  meshes 힌트
                     var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
                     if (hint != null)
                         SetParseStatus($"Clothing loaded: {displayName}\n💡 {hint}");
                 }
 
+                ShowLoading("Importing Clothing", "Applying textures & materials...", 0.78f);
                 await MaterialManager.ApplyTexturesAsync(go, result);
+
+                ShowLoading("Importing Clothing", "Finalizing...", 0.92f);
                 RegisterMeshGroup("clothing", displayName, go);
+
+                HideLoading();
                 SetParseStatus($"Clothing loaded: {displayName}");
             }
             catch (Exception e)
             {
+                HideLoading();
                 SetParseStatus($"Clothing load failed: {e.Message}");
                 Debug.LogError($"[DresserUI] Clothing load failed: {e}");
             }
@@ -523,30 +547,38 @@ namespace VirtualDresser.UI
 
         private async void LoadHairFbx(ParseResult result, string displayName)
         {
-            if (result.ExtractedFbxPaths.Count == 0) return;
+            if (result.ExtractedFbxPaths.Count == 0) { HideLoading(); return; }
 
             SetParseStatus($"Loading hair: {displayName}...");
+            ShowLoading("Importing Hair", "Loading FBX model...", 0.45f);
             try
             {
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("Hair FBX load failed"); return; }
+                if (go == null) { HideLoading(); SetParseStatus("Hair FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _hairGo    = go;
                 _hairParse = result;
 
+                ShowLoading("Importing Hair", "Binding bones to avatar...", 0.65f);
                 if (avatarRoot != null)
                 {
                     var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
                     Debug.Log($"[DresserUI] 헤어 바인딩: {stats}");
                 }
 
+                ShowLoading("Importing Hair", "Applying textures & materials...", 0.80f);
                 await MaterialManager.ApplyTexturesAsync(go, result);
+
+                ShowLoading("Importing Hair", "Finalizing...", 0.92f);
                 SuggestHideAvatarHair();
                 RegisterMeshGroup("hair", displayName, go);
+
+                HideLoading();
                 SetParseStatus($"Hair loaded: {displayName}");
             }
             catch (Exception e)
             {
+                HideLoading();
                 SetParseStatus($"Hair load failed: {e.Message}");
                 Debug.LogError($"[DresserUI] Hair load failed: {e}");
             }
@@ -1194,6 +1226,105 @@ namespace VirtualDresser.UI
         {
             if (_parseStatusLabel != null)
                 _parseStatusLabel.text = msg;
+        }
+
+        // ─── 로딩 오버레이 ───
+
+        private void CreateLoadingOverlay()
+        {
+            // 전체 화면 반투명 배경
+            _loadingOverlay = new VisualElement();
+            _loadingOverlay.style.position        = Position.Absolute;
+            _loadingOverlay.style.top             = 0;
+            _loadingOverlay.style.left            = 0;
+            _loadingOverlay.style.width           = new StyleLength(new Length(100, LengthUnit.Percent));
+            _loadingOverlay.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
+            _loadingOverlay.style.backgroundColor = new Color(0f, 0f, 0f, 0.72f);
+            _loadingOverlay.style.alignItems      = Align.Center;
+            _loadingOverlay.style.justifyContent  = Justify.Center;
+            _loadingOverlay.style.display         = DisplayStyle.None;
+            _loadingOverlay.pickingMode           = PickingMode.Position; // 클릭 차단
+
+            // 중앙 카드
+            var card = new VisualElement();
+            card.style.backgroundColor = new Color(0.13f, 0.13f, 0.13f, 1f);
+            card.style.borderTopLeftRadius     = 8;
+            card.style.borderTopRightRadius    = 8;
+            card.style.borderBottomLeftRadius  = 8;
+            card.style.borderBottomRightRadius = 8;
+            card.style.paddingTop    = 28;
+            card.style.paddingBottom = 28;
+            card.style.paddingLeft   = 36;
+            card.style.paddingRight  = 36;
+            card.style.alignItems    = Align.Center;
+            card.style.width         = 340;
+
+            // 타이틀
+            _loadingTitle = new Label("Importing...");
+            _loadingTitle.style.fontSize   = 15;
+            _loadingTitle.style.color      = new Color(1f, 1f, 1f, 0.95f);
+            _loadingTitle.style.marginBottom = 6;
+            _loadingTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
+
+            // 단계 설명
+            _loadingStep = new Label("");
+            _loadingStep.style.fontSize     = 11;
+            _loadingStep.style.color        = new Color(0.65f, 0.65f, 0.65f, 1f);
+            _loadingStep.style.marginBottom = 18;
+
+            // 게이지 트랙
+            var track = new VisualElement();
+            track.style.width           = 280;
+            track.style.height          = 8;
+            track.style.backgroundColor = new Color(0.25f, 0.25f, 0.25f, 1f);
+            track.style.borderTopLeftRadius     = 4;
+            track.style.borderTopRightRadius    = 4;
+            track.style.borderBottomLeftRadius  = 4;
+            track.style.borderBottomRightRadius = 4;
+            track.style.marginBottom            = 10;
+            track.style.overflow                = Overflow.Hidden;
+
+            // 게이지 채움
+            _progressFill = new VisualElement();
+            _progressFill.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
+            _progressFill.style.width           = 0;
+            _progressFill.style.backgroundColor = new Color(0.25f, 0.65f, 1f, 1f);
+            _progressFill.style.borderTopLeftRadius     = 4;
+            _progressFill.style.borderTopRightRadius    = 4;
+            _progressFill.style.borderBottomLeftRadius  = 4;
+            _progressFill.style.borderBottomRightRadius = 4;
+            track.Add(_progressFill);
+
+            // 퍼센트 텍스트
+            _loadingPct = new Label("0%");
+            _loadingPct.style.fontSize = 11;
+            _loadingPct.style.color    = new Color(0.5f, 0.5f, 0.5f, 1f);
+
+            card.Add(_loadingTitle);
+            card.Add(_loadingStep);
+            card.Add(track);
+            card.Add(_loadingPct);
+            _loadingOverlay.Add(card);
+            _root.Add(_loadingOverlay);
+        }
+
+        /// <summary>로딩 오버레이 표시. progress 0.0~1.0</summary>
+        private void ShowLoading(string title, string step, float progress)
+        {
+            if (_loadingOverlay == null) return;
+            _loadingOverlay.style.display = DisplayStyle.Flex;
+            _loadingTitle.text = title;
+            _loadingStep.text  = step;
+
+            int pct = Mathf.RoundToInt(progress * 100f);
+            _loadingPct.text   = $"{pct}%";
+            _progressFill.style.width = new StyleLength(new Length(pct, LengthUnit.Percent));
+        }
+
+        private void HideLoading()
+        {
+            if (_loadingOverlay == null) return;
+            _loadingOverlay.style.display = DisplayStyle.None;
         }
 
         private static string LayerDisplayName(string layerKey) => layerKey switch
