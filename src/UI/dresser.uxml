@@ -7,32 +7,41 @@
 
             <!-- 좌하단 오버레이 버튼 그룹 -->
             <ui:VisualElement name="viewer-overlay-btns"
-                style="position: absolute; bottom: 20px; left: 20px;
+                style="position: absolute; bottom: 22px; left: 22px;
                        flex-direction: column; align-items: flex-start;">
 
                 <!-- 포즈 버튼 행 -->
-                <ui:VisualElement style="flex-direction: row; margin-bottom: 7px;">
-                    <ui:Button name="pose-tpose-btn" text="T-Pose"   class="viewer-btn" style="margin-right: 5px;" />
-                    <ui:Button name="pose-apose-btn" text="A-Pose"   class="viewer-btn" style="margin-right: 5px;" />
+                <ui:VisualElement style="flex-direction: row; margin-bottom: 8px;">
+                    <ui:Button name="pose-tpose-btn"  text="T-Pose"  class="viewer-btn" style="margin-right: 5px;" />
+                    <ui:Button name="pose-apose-btn"  text="A-Pose"  class="viewer-btn" style="margin-right: 5px;" />
                     <ui:Button name="pose-armsup-btn" text="Arms Up" class="viewer-btn" />
                 </ui:VisualElement>
 
                 <!-- 카메라 리셋 -->
                 <ui:Button name="reset-view-btn" text="Reset View" class="viewer-btn viewer-btn--dim" />
-            </ui:VisualElement>
 
+            </ui:VisualElement>
         </ui:VisualElement>
 
         <!-- 오른쪽: 컨트롤 패널 -->
         <ui:VisualElement name="control-panel"
-            style="width: 320px; background-color: rgb(11, 17, 32);
-                   flex-direction: column; padding: 14px 12px;
-                   border-left-color: rgba(22, 119, 255, 0.12); border-left-width: 1px;">
+            style="width: 320px;
+                   background-color: rgb(6, 13, 27);
+                   flex-direction: column;
+                   padding: 14px 12px;
+                   border-left-color: rgba(22, 119, 255, 0.1);
+                   border-left-width: 1px;">
+
+            <!-- ── 패널 헤더 ── -->
+            <ui:VisualElement class="panel-header">
+                <ui:Label text="Virtual Dresser" class="panel-title" />
+                <ui:Label text="for Warudo" class="panel-subtitle" />
+            </ui:VisualElement>
 
             <!-- ── AVATAR PRESET ── -->
             <ui:Label text="AVATAR PRESET" class="section-label" />
             <ui:VisualElement name="avatar-selector"
-                style="flex-direction: row; flex-wrap: wrap; margin-bottom: 14px;">
+                style="flex-direction: row; flex-wrap: wrap; margin-bottom: 16px;">
                 <ui:Button name="avatar-card-manuka"  text="Manuka"  class="avatar-card" />
                 <ui:Button name="avatar-card-moe"     text="Moe"     class="avatar-card" />
                 <ui:Button name="avatar-card-shinano" text="Shinano" class="avatar-card" />
@@ -43,35 +52,51 @@
             </ui:VisualElement>
 
             <!-- 구분선 -->
-            <ui:VisualElement class="divider" style="margin-bottom: 14px;" />
+            <ui:VisualElement class="divider" style="margin-bottom: 16px;" />
 
             <!-- ── IMPORT ── -->
             <ui:Label text="IMPORT" class="section-label" />
 
-            <ui:Button name="import-avatar-btn"       text="Import Avatar"         class="btn-primary"   style="height: 36px; margin-bottom: 6px;" />
-            <ui:Button name="import-clothing-btn"     text="Import Clothing"        class="btn-secondary" style="height: 32px; margin-bottom: 4px;" />
-            <ui:Button name="import-clothing-mat-btn" text="Import Material Only"   class="btn-ghost"     style="height: 28px; margin-bottom: 4px;" />
-            <ui:Button name="import-hair-btn"         text="Import Hair"            class="btn-secondary" style="height: 32px; margin-bottom: 14px;" />
+            <!-- Avatar — Primary CTA -->
+            <ui:Button name="import-avatar-btn" text="Import Avatar"
+                class="btn-primary" style="height: 38px; margin-bottom: 6px;" />
+
+            <!-- Clothing + Hair — 2열 -->
+            <ui:VisualElement class="btn-row">
+                <ui:Button name="import-clothing-btn" text="Clothing"
+                    class="btn-secondary" style="height: 32px; margin-right: 4px;" />
+                <ui:Button name="import-hair-btn" text="Hair"
+                    class="btn-secondary" style="height: 32px;" />
+            </ui:VisualElement>
+
+            <!-- Material Only — Ghost -->
+            <ui:Button name="import-clothing-mat-btn" text="Material Only"
+                class="btn-ghost" style="height: 26px; margin-bottom: 16px;" />
 
             <!-- 구분선 -->
             <ui:VisualElement class="divider" style="margin-bottom: 10px;" />
 
             <!-- ── 상태 메시지 ── -->
             <ui:Label name="parse-status" text="Select a file to import"
-                style="font-size: 11px; color: rgba(22, 119, 255, 0.65);
-                       margin-bottom: 10px; white-space: normal;" />
+                style="font-size: 11px;
+                       letter-spacing: 0.1px;
+                       color: rgba(22, 119, 255, 0.6);
+                       margin-bottom: 10px;
+                       white-space: normal;" />
 
             <!-- ── 탭 ── -->
             <ui:VisualElement name="tab-buttons"
-                style="flex-direction: row; margin-bottom: 0;
-                       border-bottom-color: rgba(255,255,255,0.07); border-bottom-width: 1px;">
+                style="flex-direction: row;
+                       border-bottom-color: rgba(255,255,255,0.07);
+                       border-bottom-width: 1px;">
                 <ui:Button name="tab-btn-layer"    text="Layers"   class="tab-btn" />
                 <ui:Button name="tab-btn-mesh"     text="Mesh"     class="tab-btn" />
                 <ui:Button name="tab-btn-material" text="Material" class="tab-btn" />
             </ui:VisualElement>
 
             <!-- ── 탭 콘텐츠 ── -->
-            <ui:VisualElement name="main-tabs" style="flex: 1; overflow: hidden; margin-top: 6px;">
+            <ui:VisualElement name="main-tabs"
+                style="flex: 1; overflow: hidden; margin-top: 6px;">
 
                 <ui:VisualElement name="tab-layer" style="flex: 1;">
                     <ui:VisualElement name="layer-list" style="flex: 1;" />
@@ -85,8 +110,8 @@
 
             </ui:VisualElement>
 
-            <!-- ── BUILD 버튼 ── -->
-            <ui:Button name="build-btn" text="Build / Export  .warudo"
+            <!-- ── BUILD CTA ── -->
+            <ui:Button name="build-btn" text="Build / Export .warudo"
                 class="btn-primary btn-build" />
 
         </ui:VisualElement>
