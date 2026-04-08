@@ -602,18 +602,22 @@ namespace VirtualDresser.UI
             // ★ _clothingGo만 사용 — 아바타/헤어에 영향 없음
             if (_clothingGo == null)
             {
+                HideLoading();
                 SetParseStatus("Import clothing mesh first");
                 return;
             }
 
             SetParseStatus($"Applying material: {displayName}...");
+            ShowLoading("Importing Material", "Applying textures & materials...", 0.70f);
             try
             {
                 await MaterialManager.ApplyTexturesAsync(_clothingGo, result);
+                HideLoading();
                 SetParseStatus($"Material applied: {displayName}");
             }
             catch (Exception e)
             {
+                HideLoading();
                 SetParseStatus($"Material apply failed: {e.Message}");
                 Debug.LogError($"[DresserUI] Material apply failed: {e}");
             }

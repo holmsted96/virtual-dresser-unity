@@ -17,7 +17,7 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
     manifest.json               ← Unity 패키지 목록
   vd-warudo-converter/          ← .warudo 헤들리스 빌드용 별도 Unity 2021.3 프로젝트
     Assets/WarudoConverter/Editor/WarudoBuildScript.cs
-    Packages/manifest.json      ← Warudo SDK(com.warudo.mod-tool) 포함
+    Packages/manifest.json      ← Warudo SDK(app.warudo.modtool) 포함
   deploy.ps1                    ← 빌드 + 배포 자동화 스크립트
 
 실제 Unity 프로젝트 경로 (로컬 전용, git에 없음):
@@ -37,6 +37,8 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 
 > ⚠️ **중요**: 코드 편집은 `c:/vd/virtual-dresser-app/Dresser/Assets/VirtualDresser/` 에서 하고,
 > git push 전에 `src/`로 수동 동기화 필요. (아래 동기화 명령 참고)
+
+---
 
 ## 완료된 작업
 
@@ -77,7 +79,8 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - `deploy.ps1` — 빌드 + converter 배포 + 워밍업 자동화 (4단계)
 - `UnitySetupManager.cs` — 앱 최초 실행 시 Unity Hub + 2021.3.45f2 자동 설치
 - `UnityMainThreadDispatcher.cs` — 백그라운드 → 메인 스레드 디스패치
-- Warudo SDK `com.warudo.mod-tool 0.14.3.10` — vd-warudo-converter manifest에 포함 (자동 다운로드)
+- Warudo SDK `app.warudo.modtool 0.14.3.10` — vd-warudo-converter manifest에 포함 (자동 다운로드)
+  - ⚠️ 패키지명 주의: `app.warudo.modtool` (이전에 com.warudo.mod-tool 로 잘못 기재된 적 있음)
 
 ### Sprint B — boneMap 통합 ✅
 - `MeshCombiner.cs` — AvatarConfig boneMap alias 역방향 맵 구축
@@ -85,13 +88,13 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - `AutoHideOverlappingMeshes()` — 신발 착용 시 발톱/발가락 메시 자동 숨김
 - `GetBodyMeshHint()` — 단일 바디 메시 감지 → UI 힌트 반환
 
-### Sprint C — lilToon 셰이더 ✅
-- Phase 3에 통합 완료
-
 ### Sprint D — Windows Standalone 빌드 ✅
 - `BuildScript.cs` — VirtualDresser > Build Windows 메뉴 (`c:/vd/build/` 출력)
+- 창모드(Windowed) 빌드, 1280×800 기본 해상도, resizableWindow
 - dresser.uxml 전체 영문화 (Standalone에서 CJK 폰트 없어 한국어/일본어 미표시 문제 해결)
 - DragEnterEvent 등 Editor 전용 이벤트 `#if UNITY_EDITOR` 처리
+- A-Pose / Arms Up 포즈 테스트 기능 추가 (`CameraController.cs`)
+- 카메라 Reset View 버튼 (뷰포트 우상단 absolute 포지셔닝)
 
 ### Sprint E — 메시 편집 기능 ✅
 - 메시 패널 각 항목: `[Hide/Show]` `[Del]` `[...]` 버튼 (영문, Standalone 호환)
@@ -102,23 +105,63 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - ⚠️ `FloatField` 는 Unity 2021.3 런타임에 없음 → `TextField` + `float.TryParse` 사용
 - ⚠️ `unityTextOverflow` 는 Unity 2022.2+ 전용 → 제거
 
+### Sprint F — 임포트 UX + 빌드 최적화 ✅
+- 임포트 로딩 오버레이: 진행률 게이지 표시 (파싱 중 UI 피드백)
+- 아바타 완전 비가시 버그 수정: lilToon null 시 TriLib 기본 셰이더 유지 (Standard로 교체하면 Standalone strip)
+- **lilToon 빌드 시간 최적화**:
+  - Always Included Shaders에서 lilToon + URP/Lit 제거 (수천 변형 → 컴파일 1~3시간)
+  - `ShaderVariantCollection` 방식으로 교체: 실제 사용 변형 6개만 컴파일 (수십 분)
+  - `Assets/Resources/LilToonVariants.shadervariants` — 빌드 시 자동 생성
+  - Graphics Settings Preloaded Shaders에 자동 등록
+
+---
+
 ## 남은 작업
 
-### 즉시 — e2e 테스트
-1. `deploy.ps1` 실행 → `c:/vd/build/` 생성 확인
-2. `VirtualDresser.exe` 실행 → 아바타 임포트 → 의상 임포트
-3. "Build / Export" 버튼 → `.warudo` Desktop 생성 확인
-4. Warudo에서 `.warudo` 로드 테스트
+### 🔴 즉시 — e2e 테스트 (미완)
+1. `VirtualDresser > Build Windows` → `c:/vd/build/VirtualDresser.exe` 생성 확인
+2. `VirtualDresser.exe` 실행 → 아바타 임포트 → 텍스처 정상 렌더링 확인
+3. 의상 임포트 → 본 바인딩 확인
+4. "Export" 버튼 → `.warudo` 파일 생성 확인
+5. Warudo에서 `.warudo` 로드 테스트
 
-### 모에 텍스처 매칭 진단 (컴파일 후 테스트 필요)
-- 콘솔에서 `[MatMgr]` 로그로 실패 원인 확인
+### 🔴 즉시 — 모에 텍스처 매칭 최종 확인
+- 빌드 후 콘솔에서 `[MatMgr]` 로그 확인
 - "GUID매핑 없음 → 유사도 매칭: 'XXX'" 로그가 나오면 matchKey와 맵 키 비교해서 추가 대응
 
-### 개선 TODO (MVP 이후)
-- **UI 전반 고급화** — 레이아웃, 컬러, 아이콘, 전체적인 완성도
-- **카메라 UX 개선** — 오빗 속도, 줌 감도, 기본 시점 조정
-- **Import 처리 속도 개선** — 프로그레스바, 병렬처리 검토
-- **시나노 발 클리핑** — 단일 바디 메시라 자동 숨김 불가 → 메시 편집(Sprint E)으로 사용자가 직접 조정
+---
+
+## UX 개선 TODO (우선순위별)
+
+### 🟡 MVP 바로 다음 — 핵심 UX
+
+| 항목 | 설명 | 난이도 |
+|------|------|--------|
+| **Drag & Drop 파일 열기** | .unitypackage를 앱 창에 드래그해서 바로 열기. 현재 버튼 클릭만 가능. Standalone에서는 WinAPI로 구현 필요 | 중 |
+| **카메라 뷰 프리셋** | Front / Side / Top 버튼으로 즉시 시점 전환. 현재는 마우스로만 조작 | 하 |
+| **머티리얼 컬러 오버라이드** | 메시 패널에서 색상 피커로 특정 머티리얼 색상 변경. 아바타 커스터마이징 핵심 기능 | 중 |
+| **메시 목록 검색/필터** | 의상이 많을 때 이름으로 검색. 현재는 스크롤만 가능 | 하 |
+
+### 🟢 그 다음 — 완성도
+
+| 항목 | 설명 | 난이도 |
+|------|------|--------|
+| **세션 저장/복원** | 마지막으로 로드한 아바타+의상 조합을 앱 재시작 후에도 복원 | 중 |
+| **트랜스폼 Undo/Redo** | `[...]` 패널에서 수치 변경 후 Ctrl+Z 되돌리기 | 중 |
+| **아웃핏 프리셋 저장** | 현재 의상 조합을 이름 붙여 저장하고 불러오기 | 중 |
+| **뷰포트 전체화면 토글** | 오른쪽 패널 숨기고 캐릭터만 전체 화면으로 보기 | 하 |
+| **메시 다중 선택** | 체크박스로 여러 메시 선택 후 일괄 Hide/Delete | 중 |
+
+### 🔵 MVP 이후 — 품질
+
+| 항목 | 설명 | 난이도 |
+|------|------|--------|
+| **UI 전반 디자인 고급화** | 컬러 시스템, 아이콘, 패딩, 폰트 크기 등 전반적 완성도 | 상 |
+| **임포트 속도 개선** | 병렬 처리 검토, 텍스처 캐시 | 상 |
+| **시나노 발 클리핑** | 단일 바디 메시라 자동 숨김 불가 → 메시 편집(Sprint E)으로 사용자가 직접 조정하도록 안내 추가 | 하 |
+| **아바타 썸네일** | 메시 패널 각 항목에 작은 미리보기 이미지 | 상 |
+
+---
 
 ## 중요 기술 결정 & 트러블슈팅
 
@@ -135,11 +178,21 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - 배포 구조: exe 옆에 `vd-warudo-converter/` 포함 (`deploy.ps1`이 자동 복사)
 - 첫 실행 시 SDK 다운로드 + 컴파일 3~8분 소요 (Library 폴더 없으면 자동 안내)
 
+### lilToon Standalone 빌드 전략
+- `Shader.Find("lilToon")` 은 런타임에 호출 → 빌드에 셰이더가 포함되어야 함
+- Always Included Shaders 방식: 전체 변형 컴파일 → 첫 빌드 1~3시간 (❌ 비실용)
+- **ShaderVariantCollection 방식**: 실제 사용 변형만 6개 등록 → 빌드 수십 분 (✅ 채택)
+  - `Assets/Resources/LilToonVariants.shadervariants`
+  - `BuildScript.cs > CreateLilToonVariantCollection()` 에서 빌드 전 자동 생성
+  - Graphics Settings > Preloaded Shaders에 등록 → 빌드에 포함 보장
+- lilToon이 null이면 셰이더 교체 금지 (TriLib 기본 셰이더 유지), `_Color=white` 만 설정
+
 ### lilToon 렌더링
 - 셰이더 교체 후 `_Color` 반드시 white 초기화 (미설정 = 검정 렌더링)
 - 셰이더 이름 다중 탐색: `"lilToon"` → `"lilToon/lilToon"` → `"_lil/lilToon"`
 - Cutout: `_ALPHATEST_ON` keyword + renderQueue=2450
 - Transparent: `_ALPHABLEND_ON` + SrcBlend/DstBlend + renderQueue=3000
+- `_LightMinLimit=0.05` — 그림자 완전 검정 방지
 
 ### 텍스처 매칭 구조
 1. `.mat` YAML에서 GUID 추출 → guidToPathname으로 실제 파일명 역매핑
@@ -170,13 +223,18 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - DragEnterEvent / DragLeaveEvent / DragPerformEvent 없음 → `#if UNITY_EDITOR` 처리
 - Standalone 기본 폰트에 CJK 글리프 없음 → UI 텍스트 전체 영문화 필수
 
-### Standalone 텍스트 렌더링
-- Unity Standalone 기본 폰트에 CJK 글리프 없음 → 한국어/일본어 버튼 텍스트 미표시
-- 해결: dresser.uxml 모든 텍스트 영문화
+---
 
 ## 빌드 및 배포
 
-### deploy.ps1 사용법
+### 빌드 방법 (Unity Editor에서)
+```
+VirtualDresser > Build Windows
+```
+→ `c:/vd/build/VirtualDresser.exe` 생성  
+→ 첫 빌드: 10~20분 / 이후 빌드: 5~10분 (ShaderVariantCollection 덕분에 빠름)
+
+### deploy.ps1 사용법 (헤들리스 자동화)
 ```powershell
 # 전체 빌드 + 배포 (처음 실행 시 3~8분 소요)
 .\deploy.ps1
@@ -190,6 +248,8 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 2. `vd-warudo-converter/` 를 `c:/vd/build/vd-warudo-converter/` 에 복사
 3. converter 프로젝트 워밍업 (Warudo SDK 다운로드 + 스크립트 컴파일)
 4. 완료 → `c:/vd/build/` 폴더가 배포 패키지
+
+---
 
 ## 셋업 명령 (새 PC에서 Unity 프로젝트 초기 구성)
 ```bash
@@ -234,12 +294,16 @@ cp "c:/vd/virtual-dresser-app/Dresser/Assets/UI/dresser.uxml" "$REPO/src/UI/dres
 cp "c:/vd/virtual-dresser-app/Dresser/Packages/manifest.json" "$REPO/Packages/manifest.json"
 ```
 
+---
+
 ## avatar-configs 위치
 - **git 레포**: `src/Resources/avatar-configs/` (7종 포함, git 관리)
 - **Unity 프로젝트**: `c:/vd/virtual-dresser-app/Dresser/Assets/Resources/avatar-configs/`
 - 7종: manuka, moe, shinano, sio, mao, lumina, shinra
   - ⚠️ 표시명: Sio (내부 키: `shio` — config 파일명 및 DresserUI avatarIds 배열과 일치)
 - 스키마: `src/Runtime/AvatarConfig.cs`
+
+---
 
 ## 패키지 의존성
 

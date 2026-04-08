@@ -17,19 +17,12 @@ namespace VirtualDresser.Editor
         private static readonly string OutputDir = "c:/vd/build";
         private static readonly string ExeName   = "VirtualDresser.exe";
 
-        // Standalone 빌드에 반드시 포함시킬 셰이더 이름 목록
-        // Shader.Find()로만 참조하는 셰이더는 Unity가 strip하므로 여기서 강제 등록
-        private static readonly string[] RequiredShaders =
-        {
-            "lilToon",
-            "Hidden/lilToonCutout",
-            "Hidden/lilToonTransparent",
-            "lilToon/lilToon",
-            "lilToon/lilToon Cutout",
-            "lilToon/lilToon Transparent",
-            "Universal Render Pipeline/Lit",
-            "Universal Render Pipeline/Simple Lit",
-        };
+        // Always Included에는 아무 셰이더도 넣지 않음
+        // URP/Lit도 변형이 수백 개라 Always Included 시 빌드 수 시간 소요
+        // lilToon + URP 모두 ShaderVariantCollection으로 관리
+        private static readonly string[] UrpRequiredShaders = Array.Empty<string>();
+
+        private static readonly string LilToonSvcPath = "Assets/Resources/LilToonVariants.shadervariants";
 
         [MenuItem("VirtualDresser/Build Windows")]
         public static void BuildWindows()
@@ -37,8 +30,11 @@ namespace VirtualDresser.Editor
             var outputPath = Path.Combine(OutputDir, ExeName);
             Directory.CreateDirectory(OutputDir);
 
-            // ── lilToon 셰이더를 Always Included Shaders에 등록 ──
-            RegisterAlwaysIncludedShaders();
+            // Always Included에서 lilToon 제거, URP만 유지
+            CleanupAlwaysIncludedShaders();
+
+            // lilToon ShaderVariantCollection 생성 (3가지 변형만)
+            CreateLilToonVariantCollection();
 
             var scenes = new[] { "Assets/Scenes/SampleScene.unity" };
             var foundScenes = AssetDatabase.FindAssets("t:Scene");
@@ -73,19 +69,28 @@ namespace VirtualDresser.Editor
         }
 
         /// <summary>
-        /// RequiredShaders 목록을 Graphics Settings > Always Included Shaders에 추가.
-        /// 이미 포함된 항목은 중복 추가하지 않음.
+        /// Always Included Shaders에서 lilToon 계열을 제거하고 URP만 유지.
+        /// 이전 세션에서 잘못 추가된 lilToon 엔트리도 정리.
         /// </summary>
-        private static void RegisterAlwaysIncludedShaders()
+        private static void CleanupAlwaysIncludedShaders()
         {
             var gs = AssetDatabase.LoadAssetAtPath<GraphicsSettings>(
                 "ProjectSettings/GraphicsSettings.asset");
-
-            // SerializedObject로 alwaysIncludedShaders 배열 직접 편집
-            var so  = new UnityEditor.SerializedObject(gs);
+            var so  = new SerializedObject(gs);
             var arr = so.FindProperty("m_AlwaysIncludedShaders");
 
-            // 현재 등록된 셰이더 이름 수집
+            // lilToon 계열 제거
+            for (int i = arr.arraySize - 1; i >= 0; i--)
+            {
+                var s = arr.GetArrayElementAtIndex(i).objectReferenceValue as Shader;
+                if (s != null && (s.name.Contains("lil") || s.name.Contains("Lil")))
+                {
+                    arr.DeleteArrayElementAtIndex(i);
+                    Debug.Log($"[Build] Always Included에서 제거: {s.name}");
+                }
+            }
+
+            // URP 셰이더 추가 (없으면)
             var existing = new HashSet<string>();
             for (int i = 0; i < arr.arraySize; i++)
             {
@@ -93,30 +98,104 @@ namespace VirtualDresser.Editor
                 if (s != null) existing.Add(s.name);
             }
 
-            int added = 0;
-            foreach (var shaderName in RequiredShaders)
+            foreach (var shaderName in UrpRequiredShaders)
             {
                 if (existing.Contains(shaderName)) continue;
                 var shader = Shader.Find(shaderName);
-                if (shader == null) continue; // 미설치면 스킵
-
+                if (shader == null) continue;
                 arr.InsertArrayElementAtIndex(arr.arraySize);
                 arr.GetArrayElementAtIndex(arr.arraySize - 1).objectReferenceValue = shader;
-                existing.Add(shaderName);
-                added++;
-                Debug.Log($"[Build] Always Included Shaders에 추가: {shaderName}");
+                Debug.Log($"[Build] Always Included 추가: {shaderName}");
             }
 
-            if (added > 0)
+            so.ApplyModifiedProperties();
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>
+        /// lilToon의 실제 사용 변형 3가지만 ShaderVariantCollection으로 등록.
+        /// Always Included 대신 이 방식을 쓰면 빌드 시간이 대폭 단축됨.
+        /// </summary>
+        private static void CreateLilToonVariantCollection()
+        {
+            // Resources 폴더 생성 확인
+            if (!AssetDatabase.IsValidFolder("Assets/Resources"))
+                AssetDatabase.CreateFolder("Assets", "Resources");
+
+            // 기존 컬렉션 로드 or 새로 생성
+            var svc = AssetDatabase.LoadAssetAtPath<ShaderVariantCollection>(LilToonSvcPath);
+            if (svc == null)
             {
-                so.ApplyModifiedProperties();
-                AssetDatabase.SaveAssets();
-                Debug.Log($"[Build] {added}개 셰이더 등록 완료");
+                svc = new ShaderVariantCollection();
+                AssetDatabase.CreateAsset(svc, LilToonSvcPath);
             }
             else
             {
-                Debug.Log("[Build] Always Included Shaders — 추가 항목 없음 (이미 등록됨)");
+                svc.Clear();
             }
+
+            int added = 0;
+
+            // ── lilToon 변형 ──
+            var lilToon = Shader.Find("lilToon");
+            if (lilToon != null)
+            {
+                var lilKeywordSets = new[]
+                {
+                    new string[0],                 // 불투명
+                    new[] { "_ALPHATEST_ON" },     // Cutout
+                    new[] { "_ALPHABLEND_ON" },    // Transparent
+                };
+                var lilPassTypes = new[] { PassType.ScriptableRenderPipeline, PassType.ShadowCaster };
+
+                foreach (var kw in lilKeywordSets)
+                    foreach (var pt in lilPassTypes)
+                    {
+                        try { svc.Add(new ShaderVariantCollection.ShaderVariant(lilToon, pt, kw)); added++; }
+                        catch { }
+                    }
+            }
+            else
+            {
+                Debug.LogWarning("[Build] lilToon 셰이더를 찾을 수 없음");
+            }
+
+            // URP/Lit은 SVC에 넣지 않음 — multi_compile 수백 개 → 빌드 느림
+            // TriLib이 런타임에 URP/Lit 머티리얼 생성해도 MaterialManager가 즉시 lilToon으로 교체하므로 문제없음
+
+            EditorUtility.SetDirty(svc);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[Build] ShaderVariantCollection 생성 완료: {added}개 변형 → {LilToonSvcPath}");
+
+            RegisterPreloadedShaderCollection(svc);
+        }
+
+        /// <summary>
+        /// ShaderVariantCollection을 GraphicsSettings의 Preloaded Shaders에 등록.
+        /// Preloaded Shaders에 포함된 변형은 빌드에 반드시 포함됨.
+        /// </summary>
+        private static void RegisterPreloadedShaderCollection(ShaderVariantCollection svc)
+        {
+            var gs = AssetDatabase.LoadAssetAtPath<GraphicsSettings>(
+                "ProjectSettings/GraphicsSettings.asset");
+            var so  = new SerializedObject(gs);
+            var arr = so.FindProperty("m_PreloadedShaders");
+
+            // 이미 등록된 경우 스킵
+            for (int i = 0; i < arr.arraySize; i++)
+            {
+                if (arr.GetArrayElementAtIndex(i).objectReferenceValue == svc)
+                {
+                    Debug.Log("[Build] ShaderVariantCollection 이미 등록됨");
+                    return;
+                }
+            }
+
+            arr.InsertArrayElementAtIndex(arr.arraySize);
+            arr.GetArrayElementAtIndex(arr.arraySize - 1).objectReferenceValue = svc;
+            so.ApplyModifiedProperties();
+            AssetDatabase.SaveAssets();
+            Debug.Log("[Build] ShaderVariantCollection → Graphics Settings Preloaded Shaders 등록 완료");
         }
     }
 }
