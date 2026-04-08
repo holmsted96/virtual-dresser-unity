@@ -51,8 +51,8 @@ namespace VirtualDresser.Runtime
         public bool IsReady => _boneMap != null && _restPose != null;
 
         public void ApplyTPose()  => StartPoseLerp(BuildTPoseTargets());
-        public void ApplyAPose()  => StartPoseLerp(BuildArmTargets(downAngle: 45f));
-        public void ApplyArmsUp() => StartPoseLerp(BuildArmTargets(downAngle: -70f));
+        public void ApplyAPose()  => StartPoseLerp(BuildArmTargets(downAngle: -45f));
+        public void ApplyArmsUp() => StartPoseLerp(BuildArmTargets(downAngle:  70f));
 
         // ── 포즈 타겟 계산 ──
 
