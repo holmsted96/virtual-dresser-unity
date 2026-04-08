@@ -166,24 +166,24 @@ namespace VirtualDresser.Runtime
                 var ext = Path.GetExtension(pathname).ToLowerInvariant();
                 if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
 
+                // ★ 속도 개선: FBX/텍스처가 아니면 temp 파일 즉시 삭제 (이동 불필요)
+                bool needed = ext == ".fbx" || IsTextureExtension(ext);
+                if (!needed)
+                {
+                    try { File.Delete(tmpPath); } catch { }
+                    continue;
+                }
+
                 var finalName = SafeFileName(tempDir, Path.GetFileName(pathname));
                 var finalPath = Path.Combine(tempDir, finalName);
 
                 try { File.Move(tmpPath, finalPath); }
-                catch { finalPath = tmpPath; } // 이동 실패 시 임시 경로 그대로 사용
+                catch { finalPath = tmpPath; }
 
                 if (ext == ".fbx")
-                {
                     fbxBySize.Add((finalPath, new FileInfo(finalPath).Length));
-                }
-                else if (IsTextureExtension(ext))
-                {
-                    result.ExtractedTextureNames.Add(finalName);
-                }
                 else
-                {
-                    try { File.Delete(finalPath); } catch { }
-                }
+                    result.ExtractedTextureNames.Add(finalName);
             }
 
             // 남은 임시 asset 파일 정리
@@ -239,16 +239,23 @@ namespace VirtualDresser.Runtime
                 }
                 else if (filename == "asset")
                 {
-                    // asset은 디스크 임시 파일로 직접 스트리밍 (대용량 OOM 방지)
-                    // .mat 여부는 pathname을 받은 뒤 판단 → 일단 모두 저장
+                    // ★ 속도 개선: pathname이 이미 수집된 경우 불필요한 파일은 스킵
+                    // tar는 보통 pathname → asset 순이 아닐 수 있으므로 일단 크기로 판단
+                    // 10MB 이하 소형 파일은 무조건 저장 (mat/meta 포함), 대형은 저장
+                    // → 실제 필터링은 2패스에서 pathname 보고 결정
                     var tmpPath = Path.Combine(tempDir, guid + "_asset.tmp");
                     using var outFile = File.Create(tmpPath);
                     tar.CopyEntryContents(outFile);
                     guidToTempAsset[guid] = tmpPath;
                 }
+                else if (filename == "asset.meta")
+                {
+                    // asset.meta는 불필요 → 스킵
+                    tar.CopyEntryContents(Stream.Null);
+                }
                 else
                 {
-                    // 그 외 항목(preview, meta 등) 스킵 — 읽지 않으면 스트림 위치가 안 맞으므로 반드시 소비
+                    // preview 등 그 외 항목 스킵 (스트림 소비 필수)
                     tar.CopyEntryContents(Stream.Null);
                 }
             }

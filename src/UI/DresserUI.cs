@@ -155,16 +155,16 @@ namespace VirtualDresser.UI
             overlay.style.justifyContent  = Justify.Center;
             overlay.style.alignItems      = Align.Center;
 
-            var title = new Label("Warudo 익스포트 설정 필요");
+            var title = new Label("Warudo Export Setup Required");
             title.style.fontSize   = 18;
             title.style.color      = Color.white;
             title.style.marginBottom = 12;
 
             var desc = new Label(
-                $"아바타를 Warudo로 익스포트하려면\n" +
-                $"Unity {UnitySetupManager.UnityVersion}이 필요합니다.\n\n" +
-                $"설치 버튼을 누르면 자동으로 설치됩니다.\n" +
-                $"(약 3~5GB, 10~20분 소요)");
+                $"To export avatars to Warudo,\n" +
+                $"Unity {UnitySetupManager.UnityVersion} is required.\n\n" +
+                $"Click Install to set it up automatically.\n" +
+                $"(~3-5GB download, 10-20 min)");
             desc.style.color      = new Color(0.8f, 0.8f, 0.8f);
             desc.style.fontSize   = 13;
             desc.style.whiteSpace = WhiteSpace.Normal;
@@ -193,7 +193,7 @@ namespace VirtualDresser.UI
 
             var installBtn = new Button();
             installBtn.name = "setup-install-btn";
-            installBtn.text = "Unity 자동 설치 시작";
+            installBtn.text = "Install Unity Automatically";
             installBtn.style.width  = 220;
             installBtn.style.height = 40;
             installBtn.style.fontSize = 14;
@@ -201,7 +201,7 @@ namespace VirtualDresser.UI
             installBtn.style.marginBottom = 8;
 
             var skipBtn = new Button();
-            skipBtn.text = "나중에 (익스포트 기능 비활성)";
+            skipBtn.text = "Later (export disabled)";
             skipBtn.style.fontSize = 11;
             skipBtn.style.color    = new Color(0.5f, 0.5f, 0.5f);
 
@@ -217,7 +217,7 @@ namespace VirtualDresser.UI
             installBtn.RegisterCallback<ClickEvent>(_ =>
             {
                 installBtn.SetEnabled(false);
-                installBtn.text = "설치 중...";
+                installBtn.text = "Installing...";
                 skipBtn.SetEnabled(false);
 
                 _setupCts = new CancellationTokenSource();
@@ -238,13 +238,13 @@ namespace VirtualDresser.UI
                             if (success)
                             {
                                 _root.Remove(overlay);
-                                SetParseStatus("✅ Unity 설치 완료! 빌드/익스포트 기능을 사용할 수 있습니다.");
+                                SetParseStatus("Unity installed. Build / Export is now available.");
                             }
                             else
                             {
-                                progressLabel.text = $"❌ {error}";
+                                progressLabel.text = $"Error: {error}";
                                 installBtn.SetEnabled(true);
-                                installBtn.text = "다시 시도";
+                                installBtn.text = "Retry";
                                 skipBtn.SetEnabled(true);
                             }
                         });
@@ -347,8 +347,8 @@ namespace VirtualDresser.UI
         private void OpenFileForType(string forcedType)
         {
             var path = WindowsFilePicker.OpenFile(
-                title: "패키지 선택",
-                filter: "Unity Package|*.unitypackage;*.zip|모든 파일|*.*"
+                title: "Select Package",
+                filter: "Unity Package|*.unitypackage;*.zip|All Files|*.*"
             );
             if (!string.IsNullOrEmpty(path))
                 HandleFileDrop(path, forcedType);
@@ -384,7 +384,7 @@ namespace VirtualDresser.UI
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
             if (ext != ".unitypackage" && ext != ".zip") return;
 
-            SetParseStatus($"파싱 중: {Path.GetFileName(filePath)}...");
+            SetParseStatus($"Parsing: {Path.GetFileName(filePath)}...");
 
             try
             {
@@ -402,7 +402,7 @@ namespace VirtualDresser.UI
             }
             catch (Exception e)
             {
-                SetParseStatus($"오류: {e.Message}");
+                SetParseStatus($"Error: {e.Message}");
                 Debug.LogError($"[DresserUI] 파싱 실패: {e}");
             }
         }
@@ -410,7 +410,7 @@ namespace VirtualDresser.UI
         private void OnParseComplete(ParseResult result, string filePath)
         {
             var displayName = result.DetectedName ?? Path.GetFileNameWithoutExtension(filePath);
-            SetParseStatus($"감지: {result.DetectedType} ({result.Confidence:P0}) — {displayName}");
+            SetParseStatus($"Detected: {result.DetectedType} ({result.Confidence:P0}) — {displayName}");
 
             if (result.DetectedType == "avatar")
             {
@@ -425,7 +425,7 @@ namespace VirtualDresser.UI
             }
             else if (result.DetectedType == "clothing-material")
             {
-                // 메시 없이 머티리얼/텍스처만 기존 의상에 적용
+                //  meshes 없이 머티리얼/텍스처만 기존 의상에 적용
                 LoadClothingMaterialOnly(result, displayName);
             }
             else  // clothing + unknown
@@ -442,7 +442,7 @@ namespace VirtualDresser.UI
         {
             if (result.ExtractedFbxPaths.Count == 0) return;
 
-            SetParseStatus($"FBX 변환 중: {displayName}...");
+            SetParseStatus($"Loading FBX: {displayName}...");
             try
             {
                 // 기존 아바타 제거
@@ -450,7 +450,7 @@ namespace VirtualDresser.UI
                     foreach (Transform child in avatarRoot) Destroy(child.gameObject);
 
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("아바타 FBX 로드 실패"); return; }
+                if (go == null) { SetParseStatus("Avatar FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _avatarGo = go;
 
@@ -472,12 +472,12 @@ namespace VirtualDresser.UI
                     _poseController = gameObject.AddComponent<PoseController>();
                 _poseController.SetAvatar(go);
 
-                SetParseStatus($"아바타 로드 완료: {displayName}");
+                SetParseStatus($"Avatar loaded: {displayName}");
             }
             catch (Exception e)
             {
-                SetParseStatus($"아바타 로드 실패: {e.Message}");
-                Debug.LogError($"[DresserUI] 아바타 로드 실패: {e}");
+                SetParseStatus($"Avatar load failed: {e.Message}");
+                Debug.LogError($"[DresserUI] Avatar load failed: {e}");
             }
         }
 
@@ -485,11 +485,11 @@ namespace VirtualDresser.UI
         {
             if (result.ExtractedFbxPaths.Count == 0) return;
 
-            SetParseStatus($"의상 변환 중: {displayName}...");
+            SetParseStatus($"Loading clothing: {displayName}...");
             try
             {
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("의상 FBX 로드 실패"); return; }
+                if (go == null) { SetParseStatus("Clothing FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _clothingGo    = go;
                 _clothingParse = result;
@@ -499,25 +499,25 @@ namespace VirtualDresser.UI
                     var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
                     Debug.Log($"[DresserUI] 의상 바인딩: {stats}");
 
-                    // 겹치는 별도 메시 자동 숨김 (Nail_foot_*, Toe_* 등)
+                    // 겹치는 별도  meshes 자동 숨김 (Nail_foot_*, Toe_* 등)
                     var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
                     if (hidden.Count > 0)
                         Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
 
-                    // 단일 바디 메시 힌트
+                    // 단일 바디  meshes 힌트
                     var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
                     if (hint != null)
-                        SetParseStatus($"의상 로드 완료: {displayName}\n💡 {hint}");
+                        SetParseStatus($"Clothing loaded: {displayName}\n💡 {hint}");
                 }
 
                 await MaterialManager.ApplyTexturesAsync(go, result);
                 RegisterMeshGroup("clothing", displayName, go);
-                SetParseStatus($"의상 로드 완료: {displayName}");
+                SetParseStatus($"Clothing loaded: {displayName}");
             }
             catch (Exception e)
             {
-                SetParseStatus($"의상 로드 실패: {e.Message}");
-                Debug.LogError($"[DresserUI] 의상 로드 실패: {e}");
+                SetParseStatus($"Clothing load failed: {e.Message}");
+                Debug.LogError($"[DresserUI] Clothing load failed: {e}");
             }
         }
 
@@ -525,11 +525,11 @@ namespace VirtualDresser.UI
         {
             if (result.ExtractedFbxPaths.Count == 0) return;
 
-            SetParseStatus($"헤어 변환 중: {displayName}...");
+            SetParseStatus($"Loading hair: {displayName}...");
             try
             {
                 var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { SetParseStatus("헤어 FBX 로드 실패"); return; }
+                if (go == null) { SetParseStatus("Hair FBX load failed"); return; }
                 go.transform.SetParent(avatarRoot, false);
                 _hairGo    = go;
                 _hairParse = result;
@@ -543,12 +543,12 @@ namespace VirtualDresser.UI
                 await MaterialManager.ApplyTexturesAsync(go, result);
                 SuggestHideAvatarHair();
                 RegisterMeshGroup("hair", displayName, go);
-                SetParseStatus($"헤어 로드 완료: {displayName}");
+                SetParseStatus($"Hair loaded: {displayName}");
             }
             catch (Exception e)
             {
-                SetParseStatus($"헤어 로드 실패: {e.Message}");
-                Debug.LogError($"[DresserUI] 헤어 로드 실패: {e}");
+                SetParseStatus($"Hair load failed: {e.Message}");
+                Debug.LogError($"[DresserUI] Hair load failed: {e}");
             }
         }
 
@@ -560,20 +560,20 @@ namespace VirtualDresser.UI
             // ★ _clothingGo만 사용 — 아바타/헤어에 영향 없음
             if (_clothingGo == null)
             {
-                SetParseStatus("먼저 의상 메시를 임포트하세요");
+                SetParseStatus("Import clothing mesh first");
                 return;
             }
 
-            SetParseStatus($"의상 머티리얼 적용 중: {displayName}...");
+            SetParseStatus($"Applying material: {displayName}...");
             try
             {
                 await MaterialManager.ApplyTexturesAsync(_clothingGo, result);
-                SetParseStatus($"의상 머티리얼 적용 완료: {displayName}");
+                SetParseStatus($"Material applied: {displayName}");
             }
             catch (Exception e)
             {
-                SetParseStatus($"머티리얼 적용 실패: {e.Message}");
-                Debug.LogError($"[DresserUI] 머티리얼 적용 실패: {e}");
+                SetParseStatus($"Material apply failed: {e.Message}");
+                Debug.LogError($"[DresserUI] Material apply failed: {e}");
             }
         }
 
@@ -636,7 +636,7 @@ namespace VirtualDresser.UI
                 slotLabel.style.color     = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
 
                 // 에셋 이름 or 빈 상태
-                var nameLabel = new Label(loaded ? group.DisplayName : "— 비어있음");
+                var nameLabel = new Label(loaded ? group.DisplayName : "— empty");
                 nameLabel.style.flexGrow  = 1;
                 nameLabel.style.fontSize  = 12;
                 nameLabel.style.color     = loaded
@@ -646,10 +646,10 @@ namespace VirtualDresser.UI
                 row.Add(slotLabel);
                 row.Add(nameLabel);
 
-                // 로드된 경우 메시 수 배지
+                // 로드된 경우  meshes 수 배지
                 if (loaded)
                 {
-                    var badge = new Label($"{group.Entries.Count}메시");
+                    var badge = new Label($"{group.Entries.Count} meshes");
                     badge.style.fontSize        = 10;
                     badge.style.color           = new StyleColor(new Color(0.5f, 0.8f, 0.5f));
                     badge.style.marginLeft      = 4;
@@ -810,8 +810,8 @@ namespace VirtualDresser.UI
         }
 
         /// <summary>
-        /// 메시별 Position / Rotation / Scale 수치 편집 패널.
-        /// 의상 미세 위치 보정용 (스킨드 메시 특성상 큰 이동은 본 계층과 어긋남).
+        ///  meshes별 Position / Rotation / Scale 수치 편집 패널.
+        /// 의상 미세 위치 보정용 (스킨드  meshes 특성상 큰 이동은 본 계층과 어긋남).
         /// </summary>
         private static VisualElement BuildTransformPanel(MeshEntry entry)
         {
@@ -976,8 +976,8 @@ namespace VirtualDresser.UI
             foreach (var entry in avatarHairMeshes)
                 SetMeshVisible(entry, false);
 
-            Debug.Log($"[DresserUI] 헤어 에셋 드롭 감지 → 아바타 헤어 {avatarHairMeshes.Count}개 자동 숨김");
-            SetParseStatus($"아바타 헤어 {avatarHairMeshes.Count}개를 숨겼습니다. 필요하면 메쉬 탭에서 다시 켜세요.");
+            Debug.Log($"[DresserUI] 헤어 에셋 드롭 감지 → Avatar hair {avatarHairMeshes.Count}개 자동 숨김");
+            SetParseStatus($"Avatar hair {avatarHairMeshes.Count} mesh(es) hidden. Re-enable in Mesh tab.");
         }
 
         // ─── 빌드 / 익스포트 ───
@@ -986,14 +986,14 @@ namespace VirtualDresser.UI
         {
             if (_avatarGo == null)
             {
-                SetParseStatus("먼저 아바타를 임포트하세요");
+                SetParseStatus("Import an avatar first");
                 return;
             }
 
             // ── 준비 상태 확인 ──
             if (!WarudoHeadlessBuilder.IsReady(out var reason))
             {
-                SetParseStatus($"⚠️ {reason}\n설정 가이드를 확인하세요.");
+                SetParseStatus($"⚠️ {reason}\nCheck setup guide.");
                 Debug.LogWarning($"[DresserUI] Warudo 빌드 불가: {reason}");
                 return;
             }
@@ -1003,7 +1003,7 @@ namespace VirtualDresser.UI
             // ── 출력 경로 선택 ──
 #if UNITY_EDITOR
             var outputPath = UnityEditor.EditorUtility.SaveFilePanel(
-                ".warudo 저장 위치",
+                "Save .warudo",
                 System.Environment.GetFolderPath(System.Environment.SpecialFolder.Desktop),
                 avatarName + ".warudo",
                 "warudo");
@@ -1031,8 +1031,8 @@ namespace VirtualDresser.UI
             bool isFirstRun = !Directory.Exists(
                 Path.Combine(WarudoHeadlessBuilder.ConverterProjectPath, "Library"));
             var waitMsg = isFirstRun
-                ? "⏳ .warudo 빌드 중...\n(첫 실행 시 Unity 컴파일로 3~5분 소요됩니다)"
-                : "⏳ .warudo 빌드 중... (1~2분 소요)";
+                ? "⏳ .warudo building...\n(First run: Unity compile ~3-5 min)"
+                : "⏳ .warudo building... (~1-2 min)";
             SetParseStatus(waitMsg);
             Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}  (firstRun={isFirstRun})");
 
@@ -1045,12 +1045,12 @@ namespace VirtualDresser.UI
                     {
                         if (error == null)
                         {
-                            SetParseStatus($"✅ .warudo 생성 완료!\n저장 위치: {outputPath}");
+                            SetParseStatus($"✅ .warudo created!\nSaved to: {outputPath}");
                             Debug.Log($"[DresserUI] 빌드 완료: {result}");
                         }
                         else
                         {
-                            SetParseStatus($"❌ 빌드 실패\n{error}");
+                            SetParseStatus($"❌ Build failed\n{error}");
                             Debug.LogError($"[DresserUI] 빌드 실패: {error}");
                         }
                     });
@@ -1077,7 +1077,7 @@ namespace VirtualDresser.UI
         private void ToggleQualityMode()
         {
             _highQualityMode = !_highQualityMode;
-            _qualityToggleBtn.text = _highQualityMode ? "🔬 고품질 ON" : "⚡ 즉시 미리보기";
+            _qualityToggleBtn.text = _highQualityMode ? "High Quality ON" : "Preview Mode";
 
             if (_highQualityMode && _avatarParse != null)
             {
@@ -1143,10 +1143,10 @@ namespace VirtualDresser.UI
             var allTransforms = go.GetComponentsInChildren<Transform>(true);
             var allRenderers  = go.GetComponentsInChildren<Renderer>(true);
             var allSMR        = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-            Debug.Log($"[DresserUI] GO 계층: Transform {allTransforms.Length}개, " +
-                      $"Renderer {allRenderers.Length}개, SMR {allSMR.Length}개");
+            Debug.Log($"[DresserUI] GO hierarchy: Transform {allTransforms.Length}, " +
+                      $"Renderer {allRenderers.Length}, SMR {allSMR.Length}");
             Debug.Log($"[DresserUI] GO 위치: {go.transform.position}, " +
-                      $"스케일: {go.transform.localScale}, 활성: {go.activeInHierarchy}");
+                      $"Scale: {go.transform.localScale}, active: {go.activeInHierarchy}");
 
             // ── 2. 카메라 확인 ──
             var cam = Camera.main;
@@ -1198,10 +1198,10 @@ namespace VirtualDresser.UI
 
         private static string LayerDisplayName(string layerKey) => layerKey switch
         {
-            "avatar"   => "아바타",
-            "clothing" => "의상",
-            "hair"     => "헤어",
-            "material" => "머티리얼",
+            "avatar"   => "Avatar",
+            "clothing" => "Clothing",
+            "hair"     => "Hair",
+            "material" => "Material",
             _          => layerKey
         };
 
@@ -1250,15 +1250,15 @@ namespace VirtualDresser.UI
             if (string.IsNullOrEmpty(unityExe))
             {
                 onComplete?.Invoke(null,
-                    "Unity 2021.3.45f2를 찾을 수 없습니다.\n" +
-                    "Unity Hub에서 2021.3.45f2를 설치해주세요.");
+                    "Unity 2021.3.45f2 not found.\n" +
+                    "Install Unity 2021.3.45f2 via Unity Hub.");
                 return;
             }
 
             if (!Directory.Exists(ConverterProjectPath))
             {
                 onComplete?.Invoke(null,
-                    $"vd-warudo-converter 프로젝트 없음:\n{ConverterProjectPath}");
+                    $"vd-warudo-converter not found:\n{ConverterProjectPath}");
                 return;
             }
 
@@ -1295,8 +1295,8 @@ namespace VirtualDresser.UI
                 {
                     var log = File.Exists(logPath)
                         ? File.ReadAllText(logPath)[^Mathf.Min(500, File.ReadAllText(logPath).Length)..]
-                        : "로그 없음";
-                    onComplete?.Invoke(null, $"빌드 실패 (코드 {proc.ExitCode})\n{log}");
+                        : "no log";
+                    onComplete?.Invoke(null, $"Build failed (code {proc.ExitCode})\n{log}");
                 }
             };
 
@@ -1322,12 +1322,12 @@ namespace VirtualDresser.UI
         {
             if (string.IsNullOrEmpty(FindUnity2021()))
             {
-                reason = "Unity 2021.3.45f2 미설치";
+                reason = "Unity 2021.3.45f2 not installed";
                 return false;
             }
             if (!Directory.Exists(ConverterProjectPath))
             {
-                reason = "vd-warudo-converter 프로젝트 없음";
+                reason = "vd-warudo-converter not found";
                 return false;
             }
             reason = null;

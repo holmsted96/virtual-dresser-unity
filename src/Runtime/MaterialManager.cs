@@ -164,6 +164,10 @@ namespace VirtualDresser.Runtime
             var renderers = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             if (renderers.Length == 0) return;
 
+            // ★ 씬 ambient 조도 확보 (기본값이 0이면 lilToon도 검정으로 보임)
+            if (RenderSettings.ambientLight.r < 0.1f)
+                RenderSettings.ambientLight = new Color(0.4f, 0.4f, 0.4f);
+
             // 텍스처 파일 목록 (임시 폴더, 1024 이하로 리사이즈)
             var textures = await LoadAllTexturesAsync(parseResult.TempDirPath,
                 parseResult.ExtractedTextureNames);
@@ -182,15 +186,25 @@ namespace VirtualDresser.Runtime
                 var mat = smr.sharedMaterial;
                 if (mat == null) continue;
 
-                // ── lilToon 셰이더로 교체 ──
+                // ── 셰이더 교체 ──
                 var lilShader = GetLilToonShader(smr.name);
                 if (lilShader != null)
                 {
                     if (mat.shader != lilShader)
                         mat.shader = lilShader;
-
-                    // ★ 셰이더 교체 후 반드시 기본값 초기화 (_Color 미초기화 시 검정 렌더링)
+                    // ★ 교체 후 반드시 기본값 초기화 (_Color 미초기화 시 검정 렌더링)
                     InitLilToonDefaults(mat, lilShader);
+                }
+                else
+                {
+                    // lilToon 미설치 → Standard 셰이더로 폴백 (검정 렌더링 방지)
+                    var std = Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Lit");
+                    if (std != null && mat.shader != std)
+                    {
+                        mat.shader = std;
+                        mat.SetColor("_Color",   Color.white);
+                        mat.SetColor("_BaseColor", Color.white);
+                    }
                 }
 
                 // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
