@@ -337,6 +337,16 @@ namespace VirtualDresser.UI
             SetPanelDisplay("tab-layer",       tabName == "layer");
             SetPanelDisplay("mesh-panel",      tabName == "mesh");
             SetPanelDisplay("material-panel",  tabName == "material");
+
+            // 탭 버튼 활성 스타일
+            var tabMap = new[] { ("tab-btn-layer", "layer"), ("tab-btn-mesh", "mesh"), ("tab-btn-material", "material") };
+            foreach (var (btnName, tab) in tabMap)
+            {
+                var btn = _root.Q<Button>(btnName);
+                if (btn == null) continue;
+                if (tab == tabName) btn.AddToClassList("tab-btn--active");
+                else                btn.RemoveFromClassList("tab-btn--active");
+            }
         }
 
         private void SetPanelDisplay(string panelName, bool visible)
@@ -1239,7 +1249,7 @@ namespace VirtualDresser.UI
             _loadingOverlay.style.left            = 0;
             _loadingOverlay.style.width           = new StyleLength(new Length(100, LengthUnit.Percent));
             _loadingOverlay.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
-            _loadingOverlay.style.backgroundColor = new Color(0f, 0f, 0f, 0.72f);
+            _loadingOverlay.style.backgroundColor = new Color(0.02f, 0.05f, 0.12f, 0.88f); // #0b1120 tinted
             _loadingOverlay.style.alignItems      = Align.Center;
             _loadingOverlay.style.justifyContent  = Justify.Center;
             _loadingOverlay.style.display         = DisplayStyle.None;
@@ -1247,58 +1257,66 @@ namespace VirtualDresser.UI
 
             // 중앙 카드
             var card = new VisualElement();
-            card.style.backgroundColor = new Color(0.13f, 0.13f, 0.13f, 1f);
-            card.style.borderTopLeftRadius     = 8;
-            card.style.borderTopRightRadius    = 8;
-            card.style.borderBottomLeftRadius  = 8;
-            card.style.borderBottomRightRadius = 8;
-            card.style.paddingTop    = 28;
-            card.style.paddingBottom = 28;
-            card.style.paddingLeft   = 36;
-            card.style.paddingRight  = 36;
+            card.style.backgroundColor = new Color(0.067f, 0.122f, 0.208f, 1f); // #111f35
+            card.style.borderTopLeftRadius     = 10;
+            card.style.borderTopRightRadius    = 10;
+            card.style.borderBottomLeftRadius  = 10;
+            card.style.borderBottomRightRadius = 10;
+            card.style.borderTopColor          = new Color(0.086f, 0.467f, 1f, 0.2f); // #1677ff 20%
+            card.style.borderBottomColor       = new Color(0.086f, 0.467f, 1f, 0.2f);
+            card.style.borderLeftColor         = new Color(0.086f, 0.467f, 1f, 0.2f);
+            card.style.borderRightColor        = new Color(0.086f, 0.467f, 1f, 0.2f);
+            card.style.borderTopWidth          = 1;
+            card.style.borderBottomWidth       = 1;
+            card.style.borderLeftWidth         = 1;
+            card.style.borderRightWidth        = 1;
+            card.style.paddingTop    = 30;
+            card.style.paddingBottom = 30;
+            card.style.paddingLeft   = 40;
+            card.style.paddingRight  = 40;
             card.style.alignItems    = Align.Center;
             card.style.width         = 340;
 
             // 타이틀
             _loadingTitle = new Label("Importing...");
             _loadingTitle.style.fontSize   = 15;
-            _loadingTitle.style.color      = new Color(1f, 1f, 1f, 0.95f);
-            _loadingTitle.style.marginBottom = 6;
+            _loadingTitle.style.color      = new Color(1f, 1f, 1f, 0.92f);
+            _loadingTitle.style.marginBottom = 5;
             _loadingTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
 
             // 단계 설명
             _loadingStep = new Label("");
             _loadingStep.style.fontSize     = 11;
-            _loadingStep.style.color        = new Color(0.65f, 0.65f, 0.65f, 1f);
-            _loadingStep.style.marginBottom = 18;
+            _loadingStep.style.color        = new Color(0.086f, 0.467f, 1f, 0.65f); // blue-tinted
+            _loadingStep.style.marginBottom = 20;
 
             // 게이지 트랙
             var track = new VisualElement();
             track.style.width           = 280;
-            track.style.height          = 8;
-            track.style.backgroundColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-            track.style.borderTopLeftRadius     = 4;
-            track.style.borderTopRightRadius    = 4;
-            track.style.borderBottomLeftRadius  = 4;
-            track.style.borderBottomRightRadius = 4;
+            track.style.height          = 6;
+            track.style.backgroundColor = new Color(1f, 1f, 1f, 0.07f);
+            track.style.borderTopLeftRadius     = 3;
+            track.style.borderTopRightRadius    = 3;
+            track.style.borderBottomLeftRadius  = 3;
+            track.style.borderBottomRightRadius = 3;
             track.style.marginBottom            = 10;
             track.style.overflow                = Overflow.Hidden;
 
-            // 게이지 채움
+            // 게이지 채움 (#1677ff)
             _progressFill = new VisualElement();
             _progressFill.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
             _progressFill.style.width           = 0;
-            _progressFill.style.backgroundColor = new Color(0.25f, 0.65f, 1f, 1f);
-            _progressFill.style.borderTopLeftRadius     = 4;
-            _progressFill.style.borderTopRightRadius    = 4;
-            _progressFill.style.borderBottomLeftRadius  = 4;
-            _progressFill.style.borderBottomRightRadius = 4;
+            _progressFill.style.backgroundColor = new Color(0.086f, 0.467f, 1f, 1f); // #1677ff
+            _progressFill.style.borderTopLeftRadius     = 3;
+            _progressFill.style.borderTopRightRadius    = 3;
+            _progressFill.style.borderBottomLeftRadius  = 3;
+            _progressFill.style.borderBottomRightRadius = 3;
             track.Add(_progressFill);
 
             // 퍼센트 텍스트
             _loadingPct = new Label("0%");
-            _loadingPct.style.fontSize = 11;
-            _loadingPct.style.color    = new Color(0.5f, 0.5f, 0.5f, 1f);
+            _loadingPct.style.fontSize = 10;
+            _loadingPct.style.color    = new Color(1f, 1f, 1f, 0.3f);
 
             card.Add(_loadingTitle);
             card.Add(_loadingStep);
