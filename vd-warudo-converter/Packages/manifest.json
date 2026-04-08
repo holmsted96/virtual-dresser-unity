@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "com.warudo.mod-tool": "https://github.com/HakuyaLabs/Warudo-Mod-Tool.git#0.14.3.10",
+    "app.warudo.modtool": "https://github.com/HakuyaLabs/Warudo-Mod-Tool.git#0.14.3.10",
     "com.unity.nuget.newtonsoft-json": "3.2.1",
     "com.unity.render-pipelines.universal": "12.1.13",
     "com.unity.modules.animation": "1.0.0",
