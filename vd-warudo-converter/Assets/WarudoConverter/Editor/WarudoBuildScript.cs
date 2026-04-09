@@ -51,11 +51,9 @@ namespace WarudoConverter
 
         private static void RunBuild(string inputPath, string outputPath, string avatarName)
         {
-            // manifest.json 읽기 (제외 메시 + 머티리얼-텍스처 매핑)
-            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap);
-            Debug.Log($"[WarudoBuild] 제외 메시: {excludedMeshes.Count}개 — " +
-                      string.Join(", ", excludedMeshes));
-            Debug.Log($"[WarudoBuild] 머티리얼 매핑: {matTexMap.Count}개");
+            // manifest.json 읽기
+            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var smrBindings);
+            Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, SMR바인딩: {smrBindings.Count}개");
 
             var importRoot = $"Assets/VDImport_{avatarName}";
             if (AssetDatabase.IsValidFolder(importRoot))
@@ -92,7 +90,7 @@ namespace WarudoConverter
 
             // 6. 결합 Prefab 생성
             var prefabPath = BuildCombinedPrefab(
-                importRoot, avatarFbxPath, clothingDir, hairDir, avatarName, excludedMeshes);
+                importRoot, avatarFbxPath, clothingDir, hairDir, avatarName, excludedMeshes, smrBindings);
 
             // 7. .warudo 빌드
             BuildWarudoMod(prefabPath, outputPath, avatarName);
@@ -300,21 +298,26 @@ namespace WarudoConverter
         private static string BuildCombinedPrefab(
             string importRoot, string avatarFbxPath,
             string clothingAssetDir, string hairAssetDir,
-            string avatarName, HashSet<string> excludedMeshes)
+            string avatarName,
+            HashSet<string> excludedMeshes,
+            List<SmrBinding> smrBindings)
         {
-            // ── 아바타 인스턴스 (Instantiate → 독립 GO) ──
+            // ── 아바타 인스턴스 ──
             var avatarPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(avatarFbxPath);
             var root         = UnityEngine.Object.Instantiate(avatarPrefab);
             root.name        = avatarName;
 
-            // ── 아바타 본 맵 ──
+            // ── 아바타 본 맵 (이름 → Transform) ──
             var boneMap = root
                 .GetComponentsInChildren<Transform>(true)
                 .ToDictionary(t => t.name, t => t, StringComparer.OrdinalIgnoreCase);
 
-            // ── 의상 / 헤어 SMR 이식 (제외 목록 반영) ──
-            TransplantSmrs(clothingAssetDir, root, boneMap, "Clothing", excludedMeshes);
-            TransplantSmrs(hairAssetDir,     root, boneMap, "Hair",     excludedMeshes);
+            // ── smrBindings 인덱스: smrName → SmrBinding ──
+            var bindingMap = smrBindings.ToDictionary(b => b.SmrName, StringComparer.OrdinalIgnoreCase);
+
+            // ── 의상 / 헤어 SMR 이식 ──
+            TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, "Clothing", excludedMeshes);
+            TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, "Hair",     excludedMeshes);
 
             // ── 아바타 SMR 중 제외 목록 비활성화 ──
             foreach (var smr in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -322,7 +325,7 @@ namespace WarudoConverter
                 if (excludedMeshes.Contains(smr.name))
                 {
                     smr.gameObject.SetActive(false);
-                    Debug.Log($"[WarudoBuild] 제외(아바타 SMR): {smr.name}");
+                    Debug.Log($"[WarudoBuild] 제외(아바타): {smr.name}");
                 }
             }
 
@@ -343,19 +346,24 @@ namespace WarudoConverter
 
         /// <summary>
         /// srcAssetDir의 FBX에서 SkinnedMeshRenderer만 꺼내
-        /// 아바타 스켈레톤에 본 바인딩 후 avatarRoot 직하에 추가.
-        /// PrefabUtility.InstantiatePrefab 대신 Object.Instantiate 사용 →
-        /// 중첩 프리팹 없는 깨끗한 GO 생성.
+        /// manifest smrBindings의 본 이름 배열을 우선 사용해 아바타 스켈레톤에 바인딩.
+        /// manifest에 없으면 FBX의 smr.bones 이름으로 fallback.
         /// </summary>
         private static void TransplantSmrs(
             string srcAssetDir,
             GameObject avatarRoot,
             Dictionary<string, Transform> boneMap,
+            Dictionary<string, SmrBinding> bindingMap,
             string groupName,
             HashSet<string> excludedMeshes)
         {
             var fbxPaths = FindAllFbx(srcAssetDir);
             if (fbxPaths.Count == 0) return;
+
+            // hips fallback: rootBone 못찾을 때 대신 사용
+            Transform hipsFallback = null;
+            foreach (var key in new[] { "Hips", "J_Bip_C_Hips", "hips", "pelvis", "Pelvis" })
+                if (boneMap.TryGetValue(key, out hipsFallback)) break;
 
             int count = 0;
             foreach (var fbxPath in fbxPaths)
@@ -363,28 +371,58 @@ namespace WarudoConverter
                 var srcPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(fbxPath);
                 if (srcPrefab == null) continue;
 
-                // 임시 인스턴스에서 SMR 데이터 추출 후 즉시 폐기
                 var temp = UnityEngine.Object.Instantiate(srcPrefab);
                 temp.name = "__temp__";
 
                 foreach (var smr in temp.GetComponentsInChildren<SkinnedMeshRenderer>(true))
                 {
                     if (smr.sharedMesh == null) continue;
-
-                    // 앱에서 숨기거나 삭제한 메시 제외
                     if (excludedMeshes.Contains(smr.name))
                     {
                         Debug.Log($"[WarudoBuild] 제외({groupName}): {smr.name}");
                         continue;
                     }
 
-                    // 아바타 스켈레톤으로 본 재매핑
-                    var reboundBones = RemapBones(smr.bones, boneMap);
-                    var reboundRoot  = (smr.rootBone != null &&
-                                       boneMap.TryGetValue(smr.rootBone.name, out var rb))
-                                       ? rb : null;
+                    // ── 본 바인딩: manifest 우선, fallback은 FBX smr.bones 이름 ──
+                    Transform[] reboundBones;
+                    Transform   reboundRoot;
 
-                    // 새 GO에 SMR 이식
+                    if (bindingMap.TryGetValue(smr.name, out var binding) &&
+                        binding.BoneNames.Length == smr.bones.Length)
+                    {
+                        // manifest에 기록된 본 이름 순서 그대로 사용
+                        reboundBones = new Transform[binding.BoneNames.Length];
+                        for (int i = 0; i < binding.BoneNames.Length; i++)
+                        {
+                            var bn = binding.BoneNames[i];
+                            if (bn != "null" && !string.IsNullOrEmpty(bn))
+                                boneMap.TryGetValue(bn, out reboundBones[i]);
+                        }
+                        boneMap.TryGetValue(binding.RootBone ?? "", out reboundRoot);
+                        reboundRoot = reboundRoot ?? hipsFallback;
+
+                        int mapped = reboundBones.Count(b => b != null);
+                        Debug.Log($"[WarudoBuild] manifest 바인딩: {smr.name} ({mapped}/{reboundBones.Length}본)");
+                    }
+                    else
+                    {
+                        // fallback: FBX에서 읽은 본 이름으로 매핑
+                        reboundBones = new Transform[smr.bones.Length];
+                        for (int i = 0; i < smr.bones.Length; i++)
+                        {
+                            if (smr.bones[i] != null)
+                                boneMap.TryGetValue(smr.bones[i].name, out reboundBones[i]);
+                        }
+                        reboundRoot = null;
+                        if (smr.rootBone != null)
+                            boneMap.TryGetValue(smr.rootBone.name, out reboundRoot);
+                        reboundRoot = reboundRoot ?? hipsFallback;
+
+                        int mapped = reboundBones.Count(b => b != null);
+                        Debug.Log($"[WarudoBuild] FBX 바인딩(fallback): {smr.name} ({mapped}/{reboundBones.Length}본)");
+                    }
+
+                    // ── 새 GO에 SMR 이식 ──
                     var newGo  = new GameObject($"{groupName}_{smr.name}");
                     newGo.transform.SetParent(avatarRoot.transform, false);
                     var newSmr = newGo.AddComponent<SkinnedMeshRenderer>();
@@ -393,31 +431,13 @@ namespace WarudoConverter
                     newSmr.bones           = reboundBones;
                     newSmr.rootBone        = reboundRoot;
                     newSmr.localBounds     = smr.localBounds;
-
-                    int mapped = reboundBones.Count(b => b != null);
-                    Debug.Log($"[WarudoBuild] SMR 이식: {smr.name} " +
-                              $"({mapped}/{reboundBones.Length}개 본 매핑)");
                     count++;
                 }
 
                 UnityEngine.Object.DestroyImmediate(temp);
             }
 
-            Debug.Log($"[WarudoBuild] {groupName} 완료: {count}개 SMR 이식");
-        }
-
-        private static Transform[] RemapBones(
-            Transform[] srcBones, Dictionary<string, Transform> boneMap)
-        {
-            var result = new Transform[srcBones.Length];
-            for (int i = 0; i < srcBones.Length; i++)
-            {
-                if (srcBones[i] != null &&
-                    boneMap.TryGetValue(srcBones[i].name, out var mapped))
-                    result[i] = mapped;
-                // 매핑 실패 시 null → skinning이 일부 깨질 수 있지만 크래시는 방지
-            }
-            return result;
+            Debug.Log($"[WarudoBuild] {groupName} 완료: {count}개 SMR");
         }
 
         // ──────────────────────────────────────────────────────
@@ -497,55 +517,150 @@ namespace WarudoConverter
         private static void ReadManifest(
             string inputPath,
             out HashSet<string> excludedMeshes,
-            out Dictionary<string, string> matTexMap)
+            out Dictionary<string, string> matTexMap,
+            out List<SmrBinding> smrBindings)
         {
             excludedMeshes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             matTexMap      = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            smrBindings    = new List<SmrBinding>();
 
             var manifestPath = Path.Combine(inputPath, "manifest.json");
             if (!File.Exists(manifestPath)) return;
 
             var json = File.ReadAllText(manifestPath);
 
-            // ── excludedMeshes 파싱 ──
-            var exStart = json.IndexOf("\"excludedMeshes\"", StringComparison.Ordinal);
-            if (exStart >= 0)
+            // ── excludedMeshes ──
+            ParseJsonArray(json, "excludedMeshes", tokens =>
             {
-                var arrOpen  = json.IndexOf('[', exStart);
-                var arrClose = json.IndexOf(']', arrOpen);
+                foreach (var t in tokens)
+                    if (!string.IsNullOrEmpty(t)) excludedMeshes.Add(t);
+            });
+
+            // ── materialTextures ──
+            ParseJsonObject(json, "materialTextures", (k, v) =>
+            {
+                if (!string.IsNullOrEmpty(k)) matTexMap[k] = v;
+            });
+
+            // ── smrBindings: JSON 배열 내 각 객체를 파싱 ──
+            var sbStart = json.IndexOf("\"smrBindings\"", StringComparison.Ordinal);
+            if (sbStart >= 0)
+            {
+                var arrOpen = json.IndexOf('[', sbStart);
+                // 중첩 괄호를 추적하며 배열 끝 찾기
+                int depth = 0; int arrClose = -1;
+                for (int i = arrOpen; i < json.Length; i++)
+                {
+                    if (json[i] == '[') depth++;
+                    else if (json[i] == ']') { depth--; if (depth == 0) { arrClose = i; break; } }
+                }
                 if (arrOpen >= 0 && arrClose > arrOpen)
                 {
+                    // 각 { ... } 객체를 분리
                     var inner = json.Substring(arrOpen + 1, arrClose - arrOpen - 1);
-                    foreach (var token in inner.Split(','))
+                    var objects = SplitJsonObjects(inner);
+                    foreach (var obj in objects)
                     {
-                        var name = token.Trim().Trim('"');
-                        if (!string.IsNullOrEmpty(name)) excludedMeshes.Add(name);
+                        var binding = new SmrBinding();
+                        ParseJsonObject(obj, "smrName",   (_, v) => binding.SmrName  = v);
+                        ParseJsonObject(obj, "layer",     (_, v) => binding.Layer    = v);
+                        ParseJsonObject(obj, "rootBone",  (_, v) => binding.RootBone = v);
+                        var mats  = new List<string>();
+                        var bones = new List<string>();
+                        ParseJsonArray(obj, "materials",  ts => mats.AddRange(ts));
+                        ParseJsonArray(obj, "boneNames",  ts => bones.AddRange(ts));
+                        binding.Materials = mats.ToArray();
+                        binding.BoneNames = bones.ToArray();
+                        if (!string.IsNullOrEmpty(binding.SmrName))
+                            smrBindings.Add(binding);
                     }
                 }
             }
+        }
 
-            // ── materialTextures 파싱 ("matName": "texName" ペア) ──
-            var mtStart = json.IndexOf("\"materialTextures\"", StringComparison.Ordinal);
-            if (mtStart >= 0)
+        // ── 간단한 JSON 파싱 헬퍼 ──
+
+        private static void ParseJsonArray(string json, string key, Action<IEnumerable<string>> handler)
+        {
+            var keyIdx = json.IndexOf($"\"{key}\"", StringComparison.Ordinal);
+            if (keyIdx < 0) return;
+            var arrOpen  = json.IndexOf('[', keyIdx);
+            var arrClose = json.IndexOf(']', arrOpen);
+            if (arrOpen < 0 || arrClose < 0) return;
+            var inner  = json.Substring(arrOpen + 1, arrClose - arrOpen - 1);
+            var tokens = inner.Split(',').Select(t => t.Trim().Trim('"'));
+            handler(tokens);
+        }
+
+        private static void ParseJsonObject(string json, string key, Action<string, string> kvHandler)
+        {
+            // "key": "value" ペア (simple string values only)
+            var keyStr = $"\"{key}\"";
+            int pos = 0;
+            while (true)
             {
-                var objOpen  = json.IndexOf('{', mtStart);
-                var objClose = json.IndexOf('}', objOpen);
-                if (objOpen >= 0 && objClose > objOpen)
+                var ki = json.IndexOf(keyStr, pos, StringComparison.Ordinal);
+                if (ki < 0) break;
+                var colon = json.IndexOf(':', ki + keyStr.Length);
+                if (colon < 0) break;
+                // 값이 문자열인지 객체인지 확인
+                var valStart = colon + 1;
+                while (valStart < json.Length && json[valStart] == ' ') valStart++;
+                if (valStart >= json.Length) break;
+                if (json[valStart] == '"')
                 {
+                    var valEnd = json.IndexOf('"', valStart + 1);
+                    if (valEnd < 0) break;
+                    var k = key;
+                    var v = json.Substring(valStart + 1, valEnd - valStart - 1);
+                    kvHandler(k, v);
+                    pos = valEnd + 1;
+                }
+                else
+                {
+                    // 객체/배열 → 각 줄 파싱
+                    var objOpen  = json.IndexOf('{', colon);
+                    var objClose = json.IndexOf('}', objOpen > 0 ? objOpen : colon);
+                    if (objOpen < 0 || objClose < 0) break;
                     var inner = json.Substring(objOpen + 1, objClose - objOpen - 1);
-                    // 각 줄: "key": "value"
                     foreach (var line in inner.Split('\n'))
                     {
                         var l = line.Trim().TrimEnd(',');
-                        var colon = l.IndexOf(':');
-                        if (colon < 0) continue;
-                        var k = l.Substring(0, colon).Trim().Trim('"');
-                        var v = l.Substring(colon + 1).Trim().Trim('"');
-                        if (!string.IsNullOrEmpty(k) && !string.IsNullOrEmpty(v))
-                            matTexMap[k] = v;
+                        var c = l.IndexOf(':');
+                        if (c < 0) continue;
+                        var k2 = l.Substring(0, c).Trim().Trim('"');
+                        var v2 = l.Substring(c + 1).Trim().Trim('"');
+                        if (!string.IsNullOrEmpty(k2)) kvHandler(k2, v2);
                     }
+                    pos = objClose + 1;
+                    break; // object 파싱은 한번만
                 }
             }
+        }
+
+        private static List<string> SplitJsonObjects(string json)
+        {
+            var result = new List<string>();
+            int depth = 0, start = -1;
+            for (int i = 0; i < json.Length; i++)
+            {
+                if (json[i] == '{') { if (depth++ == 0) start = i; }
+                else if (json[i] == '}') { if (--depth == 0 && start >= 0) result.Add(json.Substring(start, i - start + 1)); }
+            }
+            return result;
+        }
+
+        // ──────────────────────────────────────────────────────
+        // 데이터 클래스
+        // ──────────────────────────────────────────────────────
+
+        private class SmrBinding
+        {
+            public string   SmrName;
+            public string   Layer;
+            public string   RootBone;
+            public string[] Materials;
+            public string[] BoneNames;
         }
 
         private static string GetArg(string[] args, string name)

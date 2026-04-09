@@ -1113,7 +1113,7 @@ namespace VirtualDresser.UI
         /// </summary>
         private void WriteExcludeManifest(string inputPath)
         {
-            // 숨김/삭제된 메시 목록
+            // ── 숨김/삭제된 메시 목록 ──
             var excluded = _meshGroups
                 .SelectMany(g => g.Entries)
                 .Where(e => e.IsDeleted || !e.IsVisible)
@@ -1121,8 +1121,7 @@ namespace VirtualDresser.UI
                 .Distinct()
                 .ToList();
 
-            // 실제 런타임 머티리얼 → 메인 텍스처 파일명 매핑 수집
-            // key: 머티리얼명, value: 텍스처 파일명(확장자 없음)
+            // ── 머티리얼 → 텍스처 매핑 ──
             var matTexMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in _meshGroups.SelectMany(g => g.Entries))
             {
@@ -1130,7 +1129,6 @@ namespace VirtualDresser.UI
                 foreach (var mat in entry.Renderer.sharedMaterials)
                 {
                     if (mat == null || matTexMap.ContainsKey(mat.name)) continue;
-                    // _MainTex 우선, 없으면 _BaseMap
                     Texture2D tex = null;
                     if (mat.HasProperty("_MainTex"))
                         tex = mat.GetTexture("_MainTex") as Texture2D;
@@ -1141,18 +1139,57 @@ namespace VirtualDresser.UI
                 }
             }
 
-            // JSON 직렬화 (Newtonsoft 없이)
+            // ── SMR 바인딩 정보 ──
+            // 메인 앱에서 이미 올바르게 바인딩된 본 이름 순서를 기록
+            // 컨버터는 이 순서대로 아바타 스켈레톤에서 본을 찾아 적용
+            var smrBindings = new List<string>();
+            foreach (var group in _meshGroups)
+            {
+                foreach (var entry in group.Entries)
+                {
+                    if (entry.IsDeleted || !entry.IsVisible) continue;
+                    var smr = entry.Renderer;
+                    if (smr == null || smr.sharedMesh == null) continue;
+
+                    // 본 이름 배열 (null이면 "null" 로 직렬화)
+                    var boneNames = smr.bones
+                        .Select(b => b != null ? EscapeJson(b.name) : "null")
+                        .ToArray();
+                    var rootBoneName = smr.rootBone != null ? EscapeJson(smr.rootBone.name) : "null";
+
+                    // 머티리얼 이름 배열
+                    var matNames = smr.sharedMaterials
+                        .Select(m => m != null ? EscapeJson(m.name) : "null")
+                        .ToArray();
+
+                    var bonesJson = "[ " + string.Join(", ", boneNames.Select(n => $"\"{n}\"")) + " ]";
+                    var matsJson  = "[ " + string.Join(", ", matNames.Select(n => $"\"{n}\"")) + " ]";
+
+                    smrBindings.Add(
+                        $"    {{\n" +
+                        $"      \"smrName\": \"{EscapeJson(smr.name)}\",\n" +
+                        $"      \"layer\": \"{EscapeJson(group.LayerKey)}\",\n" +
+                        $"      \"rootBone\": \"{rootBoneName}\",\n" +
+                        $"      \"materials\": {matsJson},\n" +
+                        $"      \"boneNames\": {bonesJson}\n" +
+                        $"    }}");
+                }
+            }
+
+            // ── JSON 조합 ──
             var excludedJson = string.Join(",\n", excluded.Select(n => $"    \"{EscapeJson(n)}\""));
             var matTexJson   = string.Join(",\n", matTexMap.Select(
                 kv => $"    \"{EscapeJson(kv.Key)}\": \"{EscapeJson(kv.Value)}\""));
+            var bindingsJson = string.Join(",\n", smrBindings);
 
             var json = "{\n" +
                        "  \"excludedMeshes\": [\n" + excludedJson + "\n  ],\n" +
-                       "  \"materialTextures\": {\n" + matTexJson + "\n  }\n" +
+                       "  \"materialTextures\": {\n" + matTexJson + "\n  },\n" +
+                       "  \"smrBindings\": [\n" + bindingsJson + "\n  ]\n" +
                        "}";
 
             File.WriteAllText(Path.Combine(inputPath, "manifest.json"), json);
-            Debug.Log($"[DresserUI] Export manifest: {excluded.Count}개 제외, {matTexMap.Count}개 머티리얼 매핑");
+            Debug.Log($"[DresserUI] manifest: 제외 {excluded.Count}개, 머티리얼 {matTexMap.Count}개, SMR {smrBindings.Count}개");
         }
 
         private static string EscapeJson(string s) =>
