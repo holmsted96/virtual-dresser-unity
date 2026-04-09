@@ -564,9 +564,13 @@ namespace WarudoConverter
             out Dictionary<string, string> matTexMap,
             out List<SmrBinding> smrBindings)
         {
-            excludedMeshes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            matTexMap      = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            smrBindings    = new List<SmrBinding>();
+            var ex  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var mtm = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var sb  = new List<SmrBinding>();
+
+            excludedMeshes = ex;
+            matTexMap      = mtm;
+            smrBindings    = sb;
 
             var manifestPath = Path.Combine(inputPath, "manifest.json");
             if (!File.Exists(manifestPath)) return;
@@ -577,13 +581,13 @@ namespace WarudoConverter
             ParseJsonArray(json, "excludedMeshes", tokens =>
             {
                 foreach (var t in tokens)
-                    if (!string.IsNullOrEmpty(t)) excludedMeshes.Add(t);
+                    if (!string.IsNullOrEmpty(t)) ex.Add(t);
             });
 
             // ── materialTextures ──
             ParseJsonObject(json, "materialTextures", (k, v) =>
             {
-                if (!string.IsNullOrEmpty(k)) matTexMap[k] = v;
+                if (!string.IsNullOrEmpty(k)) mtm[k] = v;
             });
 
             // ── smrBindings: JSON 배열 내 각 객체를 파싱 ──
@@ -616,7 +620,7 @@ namespace WarudoConverter
                         binding.Materials = mats.ToArray();
                         binding.BoneNames = bones.ToArray();
                         if (!string.IsNullOrEmpty(binding.SmrName))
-                            smrBindings.Add(binding);
+                            sb.Add(binding);
                     }
                 }
             }
