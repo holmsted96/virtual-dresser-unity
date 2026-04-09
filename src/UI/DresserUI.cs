@@ -1187,6 +1187,16 @@ namespace VirtualDresser.UI
                         .ToArray();
                     var rootBoneName = smr.rootBone != null ? EscapeJson(smr.rootBone.name) : "null";
 
+                    // 머티리얼 슬롯별 텍스처 파일명 (인덱스 기반 → 이름 매핑 불필요)
+                    var texNames = smr.sharedMaterials.Select(m =>
+                    {
+                        if (m == null) return "null";
+                        Texture2D t = null;
+                        if (m.HasProperty("_MainTex")) t = m.GetTexture("_MainTex") as Texture2D;
+                        if (t == null && m.HasProperty("_BaseMap")) t = m.GetTexture("_BaseMap") as Texture2D;
+                        return t != null ? EscapeJson(t.name) : "null";
+                    }).ToArray();
+
                     // 머티리얼 이름 배열
                     var matNames = smr.sharedMaterials
                         .Select(m => m != null ? EscapeJson(m.name) : "null")
@@ -1194,6 +1204,7 @@ namespace VirtualDresser.UI
 
                     var bonesJson = "[ " + string.Join(", ", boneNames.Select(n => $"\"{n}\"")) + " ]";
                     var matsJson  = "[ " + string.Join(", ", matNames.Select(n => $"\"{n}\"")) + " ]";
+                    var texsJson  = "[ " + string.Join(", ", texNames.Select(n => $"\"{n}\"")) + " ]";
 
                     smrBindings.Add(
                         $"    {{\n" +
@@ -1201,6 +1212,7 @@ namespace VirtualDresser.UI
                         $"      \"layer\": \"{EscapeJson(group.LayerKey)}\",\n" +
                         $"      \"rootBone\": \"{rootBoneName}\",\n" +
                         $"      \"materials\": {matsJson},\n" +
+                        $"      \"textures\": {texsJson},\n" +
                         $"      \"boneNames\": {bonesJson}\n" +
                         $"    }}");
                 }

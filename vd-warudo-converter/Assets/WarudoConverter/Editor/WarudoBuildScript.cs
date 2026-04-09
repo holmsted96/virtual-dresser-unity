@@ -96,11 +96,13 @@ namespace WarudoConverter
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
             // ── [5] 텍스처 → 머티리얼 할당 ──
-            AssignTexturesToMaterials(importRoot, matTexMap);
+            var texByName = BuildTexByName(importRoot);
+            AssignTexturesToMaterials(importRoot, matTexMap, texByName);
 
             // ── [6] 결합 Prefab 생성 ──
             var prefabPath = BuildCombinedPrefab(
-                importRoot, avatarFbxPath, clothingDir, hairDir, avatarName, excludedMeshes, smrBindings);
+                importRoot, avatarFbxPath, clothingDir, hairDir, avatarName,
+                excludedMeshes, smrBindings, texByName);
 
             // ── [7] .warudo 빌드 ──
             BuildWarudoMod(prefabPath, outputPath, avatarName);
@@ -230,20 +232,24 @@ namespace WarudoConverter
         // 텍스처 → 머티리얼 할당
         // ──────────────────────────────────────────────────────
 
-        private static void AssignTexturesToMaterials(
-            string importRoot,
-            Dictionary<string, string> matTexMap)
+        private static Dictionary<string, string> BuildTexByName(string importRoot)
         {
-            // importRoot 내 모든 텍스처 수집 (파일명 → 에셋 경로)
-            var texByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var guid in AssetDatabase.FindAssets("t:Texture2D", new[] { importRoot }))
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
                 var key  = Path.GetFileNameWithoutExtension(path);
-                if (!texByName.ContainsKey(key)) texByName[key] = path;
+                if (!map.ContainsKey(key)) map[key] = path;
             }
+            Debug.Log($"[WarudoBuild] 텍스처 {map.Count}개 발견");
+            return map;
+        }
 
-            Debug.Log($"[WarudoBuild] 텍스처 {texByName.Count}개 발견");
+        private static void AssignTexturesToMaterials(
+            string importRoot,
+            Dictionary<string, string> matTexMap,
+            Dictionary<string, string> texByName)
+        {
             if (texByName.Count == 0) return;
 
             // 외부 .mat 파일에 텍스처 할당
@@ -351,7 +357,8 @@ namespace WarudoConverter
             string clothingAssetDir, string hairAssetDir,
             string avatarName,
             HashSet<string> excludedMeshes,
-            List<SmrBinding> smrBindings)
+            List<SmrBinding> smrBindings,
+            Dictionary<string, string> texByName)
         {
             // ── 아바타 인스턴스 ──
             var avatarPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(avatarFbxPath);
@@ -371,8 +378,8 @@ namespace WarudoConverter
             TransplantMissingBones(hairAssetDir,     root, boneMap);
 
             // ── 의상 / 헤어 SMR 이식 ──
-            TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, "Clothing", excludedMeshes);
-            TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, "Hair",     excludedMeshes);
+            TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, texByName, "Clothing", excludedMeshes);
+            TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, texByName, "Hair",     excludedMeshes);
 
             // ── 아바타 SMR 중 제외 목록 비활성화 ──
             foreach (var smr in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -409,6 +416,59 @@ namespace WarudoConverter
         /// 물리 본, 스커트 본, 리본 본 등 아바타에 없는 시뮬레이션 본들을 추가해
         /// 의상 SMR의 bone 참조가 null이 되지 않도록 한다.
         /// </summary>
+        /// <summary>
+        /// SMR의 sharedMaterials를 복제해 슬롯별 텍스처를 적용한 배열 반환.
+        /// texNames[i] = "null" 이거나 텍스처를 못 찾으면 원본 머티리얼 유지.
+        /// </summary>
+        private static Material[] ApplySlotTextures(
+            Material[] srcMaterials,
+            string[] texNames,
+            Dictionary<string, string> texByName)
+        {
+            var result = new Material[srcMaterials.Length];
+            for (int i = 0; i < srcMaterials.Length; i++)
+            {
+                var src     = srcMaterials[i];
+                var texName = i < texNames.Length ? texNames[i] : "null";
+
+                if (src == null || texName == "null" || string.IsNullOrEmpty(texName))
+                {
+                    result[i] = src;
+                    continue;
+                }
+
+                // 텍스처 경로 탐색 (확장자 제거 후 exact → partial)
+                var key = Path.GetFileNameWithoutExtension(texName);
+                if (!texByName.TryGetValue(key, out var texPath) &&
+                    !texByName.TryGetValue(texName, out texPath))
+                {
+                    foreach (var kv in texByName)
+                    {
+                        if (kv.Key.IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            key.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                        { texPath = kv.Value; break; }
+                    }
+                }
+
+                if (texPath == null) { result[i] = src; continue; }
+
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(texPath);
+                if (tex == null) { result[i] = src; continue; }
+
+                // 머티리얼 복제 후 텍스처 적용
+                var mat = UnityEngine.Object.Instantiate(src);
+                mat.name = src.name;
+                if (mat.HasProperty("_MainTex"))   mat.SetTexture("_MainTex",  tex);
+                if (mat.HasProperty("_BaseMap"))   mat.SetTexture("_BaseMap",  tex);
+                if (mat.HasProperty("_Color"))     mat.SetColor("_Color",    Color.white);
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+                result[i] = mat;
+
+                Debug.Log($"[WarudoBuild] 슬롯[{i}] 텍스처: {src.name} ← {Path.GetFileName(texPath)}");
+            }
+            return result;
+        }
+
         private static void TransplantMissingBones(
             string srcAssetDir,
             GameObject avatarRoot,
@@ -476,6 +536,7 @@ namespace WarudoConverter
             GameObject avatarRoot,
             Dictionary<string, Transform> boneMap,
             Dictionary<string, SmrBinding> bindingMap,
+            Dictionary<string, string> texByName,
             string groupName,
             HashSet<string> excludedMeshes)
         {
@@ -569,10 +630,23 @@ namespace WarudoConverter
                     newGo.transform.SetParent(avatarRoot.transform, false);
                     var newSmr = newGo.AddComponent<SkinnedMeshRenderer>();
                     newSmr.sharedMesh      = smr.sharedMesh;
-                    newSmr.sharedMaterials = smr.sharedMaterials;
                     newSmr.bones           = reboundBones;
                     newSmr.rootBone        = reboundRoot;
                     newSmr.localBounds     = smr.localBounds;
+
+                    // ── 슬롯별 텍스처 직접 적용 ──
+                    // manifest의 textures[] 인덱스가 일치하면 이름 매핑 없이 바로 적용
+                    if (binding != null &&
+                        binding.Textures != null &&
+                        binding.Textures.Length == smr.sharedMaterials.Length)
+                    {
+                        newSmr.sharedMaterials = ApplySlotTextures(
+                            smr.sharedMaterials, binding.Textures, texByName);
+                    }
+                    else
+                    {
+                        newSmr.sharedMaterials = smr.sharedMaterials;
+                    }
                     count++;
                 }
 
@@ -713,9 +787,12 @@ namespace WarudoConverter
                         ParseJsonObject(obj, "rootBone",  (_, v) => binding.RootBone = v);
                         var mats  = new List<string>();
                         var bones = new List<string>();
+                        var texs  = new List<string>();
                         ParseJsonArray(obj, "materials",  ts => mats.AddRange(ts));
+                        ParseJsonArray(obj, "textures",   ts => texs.AddRange(ts));
                         ParseJsonArray(obj, "boneNames",  ts => bones.AddRange(ts));
                         binding.Materials = mats.ToArray();
+                        binding.Textures  = texs.ToArray();
                         binding.BoneNames = bones.ToArray();
                         if (!string.IsNullOrEmpty(binding.SmrName))
                             sb.Add(binding);
@@ -806,6 +883,7 @@ namespace WarudoConverter
             public string   Layer;
             public string   RootBone;
             public string[] Materials;
+            public string[] Textures;   // 슬롯별 텍스처 파일명 (인덱스 기반)
             public string[] BoneNames;
         }
 
