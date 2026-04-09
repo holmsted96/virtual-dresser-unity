@@ -1886,7 +1886,8 @@ namespace VirtualDresser.UI
                 var cell = new VisualElement();
                 cell.style.width  = 24;
                 cell.style.height = 14;
-                cell.style.margin = 1.5f;
+                cell.style.marginTop = cell.style.marginBottom =
+                cell.style.marginLeft = cell.style.marginRight = 1.5f;
                 cell.style.backgroundColor = presetColor;
                 cell.style.borderTopLeftRadius     = 2;
                 cell.style.borderTopRightRadius    = 2;
