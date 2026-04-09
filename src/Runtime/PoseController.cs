@@ -24,14 +24,14 @@ namespace VirtualDresser.Runtime
         // ── 공개 API ──
 
         /// <summary>아바타 로드 직후 호출. 본 매핑 + rest 포즈 저장.</summary>
-        public bool SetAvatar(GameObject avatarRoot)
+        public bool SetAvatar(GameObject avatarRoot, AvatarConfig config = null)
         {
             _boneMap  = null;
             _restPose = null;
 
             if (avatarRoot == null) return false;
 
-            _boneMap = BoneMapper.MapToHumanoid(avatarRoot.transform);
+            _boneMap = BoneMapper.MapToHumanoid(avatarRoot.transform, config);
             if (_boneMap == null)
             {
                 Debug.LogWarning("[PoseController] 본 매핑 실패 — 포즈 기능 비활성");

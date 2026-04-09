@@ -400,6 +400,10 @@ namespace VirtualDresser.UI
                 btn?.RegisterCallback<ClickEvent>(_ => SelectAvatar(capturedId));
             }
 
+            // 탭 패널에 tab-content 클래스 추가 (USS 페이드인 트랜지션용)
+            foreach (var pid in new[] { "tab-layer", "mesh-panel", "material-panel", "blendshape-panel" })
+                _root.Q<VisualElement>(pid)?.AddToClassList("tab-content");
+
             // 초기 탭: 레이어
             SwitchTab("layer");
         }
@@ -408,10 +412,26 @@ namespace VirtualDresser.UI
 
         private void SwitchTab(string tabName)
         {
-            SetPanelDisplay("tab-layer",        tabName == "layer");
-            SetPanelDisplay("mesh-panel",       tabName == "mesh");
-            SetPanelDisplay("material-panel",   tabName == "material");
-            SetPanelDisplay("blendshape-panel", tabName == "blendshape");
+            var panelIds = new[] { "tab-layer", "mesh-panel", "material-panel", "blendshape-panel" };
+            var paneTab  = new[] { "layer",     "mesh",       "material",       "blendshape" };
+
+            for (int i = 0; i < panelIds.Length; i++)
+            {
+                var panel = _root.Q<VisualElement>(panelIds[i]);
+                if (panel == null) continue;
+                bool active = paneTab[i] == tabName;
+                panel.style.display = active ? DisplayStyle.Flex : DisplayStyle.None;
+                // 탭 전환 페이드인 애니메이션
+                if (active)
+                {
+                    panel.RemoveFromClassList("tab-content--visible");
+                    panel.schedule.Execute(() => panel.AddToClassList("tab-content--visible")).StartingIn(16);
+                }
+                else
+                {
+                    panel.RemoveFromClassList("tab-content--visible");
+                }
+            }
 
             // 탭 버튼 활성 스타일
             var tabNames  = new[] { "layer", "mesh", "material", "blendshape" };
@@ -780,15 +800,14 @@ namespace VirtualDresser.UI
 
             foreach (var slot in new[] { "avatar", "clothing", "hair" })
             {
+                var group  = _meshGroups.FirstOrDefault(g => g.LayerKey == slot);
+                var loaded = group != null;
+
                 var row = new VisualElement();
+                row.AddToClassList("layer-slot-row");
+                if (loaded) row.AddToClassList("layer-slot-row--loaded");
                 row.style.flexDirection = FlexDirection.Row;
                 row.style.alignItems    = Align.Center;
-                row.style.marginBottom  = 6;
-                row.style.paddingLeft   = 4;
-                row.style.paddingRight  = 4;
-
-                var group = _meshGroups.FirstOrDefault(g => g.LayerKey == slot);
-                var loaded = group != null;
 
                 // 슬롯 레이블
                 var slotLabel = new Label(LayerDisplayName(slot));
@@ -918,17 +937,10 @@ namespace VirtualDresser.UI
 
             // ── 메인 행: [toggle] [name] [Hide/Show] [Del] [...] ──
             var row = new VisualElement();
-            row.style.flexDirection   = FlexDirection.Row;
-            row.style.alignItems      = Align.Center;
-            row.style.paddingLeft     = 4;
-            row.style.paddingRight    = 2;
-            row.style.borderTopLeftRadius     = 3;
-            row.style.borderTopRightRadius    = 3;
-            row.style.borderBottomLeftRadius  = 3;
-            row.style.borderBottomRightRadius = 3;
-            // 선택된 항목 하이라이트
-            if (isSelected)
-                row.style.backgroundColor = new Color(0.086f, 0.467f, 1f, 0.18f);
+            row.AddToClassList("mesh-entry");
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems    = Align.Center;
+            if (isSelected) row.AddToClassList("mesh-entry--selected");
 
             var toggle = new Toggle { value = entry.IsVisible };
             toggle.style.marginRight = 4;
@@ -1728,11 +1740,15 @@ namespace VirtualDresser.UI
 
             if (_selectedEntry == null)
             {
+                _inspectorPanel.RemoveFromClassList("inspector--visible");
                 _inspectorPanel.style.display = DisplayStyle.None;
                 return;
             }
 
             _inspectorPanel.style.display = DisplayStyle.Flex;
+            // 1フレーム遅延でフェードイン (display→flex後にopacityトランジション開始)
+            _inspectorPanel.schedule.Execute(() =>
+                _inspectorPanel.AddToClassList("inspector--visible")).StartingIn(16);
 
             // ── 헤더: 메쉬 이름 + Hide/Delete + X ──
             var header = new VisualElement();

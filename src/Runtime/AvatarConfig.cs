@@ -10,10 +10,39 @@
 
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace VirtualDresser.Runtime
 {
+    /// <summary>
+    /// boneMap의 "_comment_*" 키(string 값)를 무시하고 배열 값만 역직렬화.
+    /// </summary>
+    public class BoneMapConverter : JsonConverter<Dictionary<string, List<string>>>
+    {
+        public override Dictionary<string, List<string>> ReadJson(
+            JsonReader reader, Type objectType,
+            Dictionary<string, List<string>> existingValue,
+            bool hasExistingValue, JsonSerializer serializer)
+        {
+            var dict = new Dictionary<string, List<string>>();
+            var obj  = JObject.Load(reader);
+            foreach (var prop in obj.Properties())
+            {
+                if (prop.Name.StartsWith("_comment", StringComparison.OrdinalIgnoreCase)) continue;
+                if (prop.Value.Type == JTokenType.Array)
+                    dict[prop.Name] = prop.Value.ToObject<List<string>>();
+            }
+            return dict;
+        }
+
+        public override void WriteJson(JsonWriter writer,
+            Dictionary<string, List<string>> value, JsonSerializer serializer)
+            => serializer.Serialize(writer, value);
+    }
+
+
     /// <summary>
     /// avatar-configs/*.json 스키마
     /// 현재 7종 아바타 설정 파일과 100% 호환
@@ -31,9 +60,27 @@ namespace VirtualDresser.Runtime
 
         // NOTE: Unity JsonUtility는 Dictionary 미지원 → Newtonsoft.Json 필요
         // boneMap: { "Hips": ["Hips", "J_Bip_C_Hips", ...], ... }
+        // BoneMapConverter가 _comment_* 키를 자동으로 무시
+        [JsonConverter(typeof(BoneMapConverter))]
         public Dictionary<string, List<string>> boneMap;
 
         public List<string> knownClothingPrefixes;
+
+        /// <summary>
+        /// 아바타별 머티리얼 매핑 설정
+        /// smrToMat: SMR 이름 → .mat 파일명
+        /// matNameToMat: FBX 내부 mat 이름 → .mat 파일명
+        /// </summary>
+        public MaterialConfig materialConfig;
+    }
+
+    [Serializable]
+    public class MaterialConfig
+    {
+        /// <summary>SMR 이름 → .mat 파일명 (파일명 기준 매칭용)</summary>
+        public Dictionary<string, string> smrToMat;
+        /// <summary>FBX 내부 mat 이름 → .mat 파일명 (TriLib mat.name 변환용)</summary>
+        public Dictionary<string, string> matNameToMat;
     }
 
     /// <summary>

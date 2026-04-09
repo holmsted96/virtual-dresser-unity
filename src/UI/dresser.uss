@@ -1,281 +1,429 @@
 /* =================================================================
-   dresser.uss  —  Virtual Dresser  Design System v2
+   dresser.uss  —  Virtual Dresser  Design System v3  (Warudo Style)
    -----------------------------------------------------------------
    Color tokens
-     --blue-600   : #1677ff  rgb(22, 119, 255)
-     --blue-500   : #4096ff  rgb(64, 150, 255)
-     --blue-400   : #69b0ff
-     --panel-bg   : #060d1b  rgb(6, 13, 27)
-     --surface-1  : #0c1626  rgb(12, 22, 38)
-     --surface-2  : #0f1e36  rgb(15, 30, 54)
-     --text-100   : rgba(255,255,255,0.92)
-     --text-60    : rgba(255,255,255,0.58)
-     --text-35    : rgba(255,255,255,0.35)
-     --border     : rgba(255,255,255,0.07)
-     --border-blue: rgba(22,119,255,0.22)
-
-   Typography scale
-     xs  : 9px  / letter-spacing 1.2px  (section caps)
-     sm  : 10px / letter-spacing 0.2px  (labels, tags)
-     base: 11px / letter-spacing 0.1px  (body, status)
-     md  : 12px / letter-spacing 0.2px  (buttons)
-     lg  : 13px / letter-spacing 0.3px  (build CTA)
-     xl  : 16px / letter-spacing -0.2px (title)
+     Deep space dark base  : #030b19
+     Panel bg              : #05101f
+     Surface-1             : #091828  (card / row bg)
+     Surface-2             : #0d2040  (elevated card)
+     Surface-hover         : #112650
+     Blue-600  primary     : #1677ff
+     Blue-500  hover       : #3d8ef0
+     Blue-400  secondary   : #5ba3f5
+     Blue-glow             : rgba(22,119,255,0.12)
+     Blue-rim              : rgba(22,119,255,0.40)
+     Text-100              : rgba(255,255,255,0.95)
+     Text-70               : rgba(255,255,255,0.70)
+     Text-40               : rgba(255,255,255,0.40)
+     Text-20               : rgba(255,255,255,0.20)
+     Border-subtle         : rgba(255,255,255,0.06)
+     Border-blue           : rgba(22,119,255,0.18)
+     Border-blue-rim       : rgba(22,119,255,0.48)
    ================================================================= */
 
-/* ── ROOT — 기본 폰트 (Open Sans Regular) ── */
+/* ── ROOT ── */
 #root {
     background-color: rgba(0, 0, 0, 0);
     -unity-font: resource('Fonts/OpenSans-Regular');
 }
 
-/* ── 패널 전체: Regular 기본 ── */
+/* ── CONTROL PANEL ── */
 #control-panel {
     -unity-font: resource('Fonts/OpenSans-Regular');
+    background-color: rgb(5, 16, 31);
+    border-left-color: rgba(22, 119, 255, 0.14);
+    border-left-width: 1px;
 }
 
-/* ── 폰트 위계 (Open Sans) ──────────────────────────────────────
-   Bold    → 헤더 타이틀, Build CTA
-   SemiBold → 섹션 레이블, Primary 버튼, 탭 active
-   Regular  → 나머지 전체 (root에서 상속)
-   ─────────────────────────────────────────────────────────────── */
-.panel-title    { -unity-font: resource('Fonts/OpenSans-Bold');     }
-.btn-build      { -unity-font: resource('Fonts/OpenSans-Bold');     }
-.section-label  { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
-.btn-primary    { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
-.tab-btn--active{ -unity-font: resource('Fonts/OpenSans-SemiBold'); }
-.avatar-card--active { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
-.panel-subtitle { -unity-font: resource('Fonts/OpenSans-Regular');  }
-.viewer-btn     { -unity-font: resource('Fonts/OpenSans-Regular');  }
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   FONT HIERARCHY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.panel-title       { -unity-font: resource('Fonts/OpenSans-Bold');     }
+.btn-build         { -unity-font: resource('Fonts/OpenSans-Bold');     }
+.section-label     { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
+.btn-primary       { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
+.tab-btn--active   { -unity-font: resource('Fonts/OpenSans-SemiBold'); }
+.avatar-card--active{ -unity-font: resource('Fonts/OpenSans-SemiBold'); }
+.panel-subtitle    { -unity-font: resource('Fonts/OpenSans-Regular');  }
+.viewer-btn        { -unity-font: resource('Fonts/OpenSans-Regular');  }
 
-/* ── PANEL HEADER ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PANEL HEADER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .panel-header {
-    padding: 16px 14px 12px 14px;
-    border-bottom-color: rgba(22, 119, 255, 0.1);
+    padding-top: 18px;
+    padding-bottom: 14px;
+    padding-left: 16px;
+    padding-right: 16px;
+    border-bottom-color: rgba(22, 119, 255, 0.12);
     border-bottom-width: 1px;
     margin-bottom: 14px;
     margin-left: -12px;
     margin-right: -12px;
     margin-top: -14px;
+    background-color: rgba(22, 119, 255, 0.04);
 }
 .panel-title {
     font-size: 15px;
-    color: rgba(255, 255, 255, 0.92);
+    color: rgba(255, 255, 255, 0.95);
     letter-spacing: -0.3px;
-
-    margin-bottom: 1px;
+    margin-bottom: 2px;
 }
 .panel-subtitle {
-    font-size: 10px;
-    color: rgba(22, 119, 255, 0.6);
-    letter-spacing: 0.5px;
-}
-
-/* ── SECTION LABELS ── */
-.section-label {
     font-size: 9px;
-    color: rgba(22, 119, 255, 0.5);
-    letter-spacing: 1.4px;
-    margin-bottom: 8px;
-
+    color: rgba(22, 119, 255, 0.55);
+    letter-spacing: 1.8px;
 }
 
-/* ── DIVIDER ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   SECTION LABELS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.section-label {
+    font-size: 8px;
+    color: rgba(22, 119, 255, 0.55);
+    letter-spacing: 2.0px;
+    margin-bottom: 8px;
+    margin-left: 2px;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   DIVIDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .divider {
     height: 1px;
-    background-color: rgba(255, 255, 255, 0.06);
+    background-color: rgba(255, 255, 255, 0.05);
 }
 
-/* ── AVATAR CARDS ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   AVATAR CARDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .avatar-card {
     flex: 1;
-    min-width: 60px;
+    min-width: 58px;
     height: 28px;
     margin: 2px;
     font-size: 10px;
     letter-spacing: 0.1px;
-    background-color: rgba(22, 119, 255, 0.06);
-    color: rgba(255, 255, 255, 0.55);
-    border-color: rgba(22, 119, 255, 0.15);
+    background-color: rgba(9, 24, 40, 0.9);
+    color: rgba(255, 255, 255, 0.50);
+    border-color: rgba(22, 119, 255, 0.14);
     border-width: 1px;
-    border-radius: 5px;
-    transition-property: background-color, border-color, color, scale;
-    transition-duration: 150ms;
+    border-radius: 6px;
+    transition-property: background-color, border-color, color, translate;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .avatar-card:hover {
-    background-color: rgba(22, 119, 255, 0.14);
-    color: rgba(255, 255, 255, 0.88);
-    border-color: rgba(22, 119, 255, 0.42);
+    background-color: rgba(22, 119, 255, 0.12);
+    color: rgba(255, 255, 255, 0.90);
+    border-color: rgba(22, 119, 255, 0.45);
     translate: 0 -1px;
 }
 .avatar-card:active {
-    scale: 0.96 0.96;
-    background-color: rgba(22, 119, 255, 0.2);
+    background-color: rgba(22, 119, 255, 0.20);
+    border-color: rgba(22, 119, 255, 0.60);
     translate: 0 0;
 }
 .avatar-card--active {
-    background-color: rgba(22, 119, 255, 0.2);
-    color: rgb(255, 255, 255);
-    border-color: rgba(22, 119, 255, 0.72);
-
+    background-color: rgba(22, 119, 255, 0.18);
+    color: rgba(255, 255, 255, 0.95);
+    border-color: rgba(22, 119, 255, 0.65);
 }
 
-/* ── PRIMARY BUTTON ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PRIMARY BUTTON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .btn-primary {
     font-size: 12px;
     letter-spacing: 0.2px;
-
     background-color: rgb(22, 119, 255);
     color: rgb(255, 255, 255);
     border-color: rgb(22, 119, 255);
     border-width: 1px;
-    border-radius: 6px;
+    border-radius: 7px;
     padding-top: 0;
     padding-bottom: 0;
-    transition-property: background-color, border-color, scale;
-    transition-duration: 160ms;
+    transition-property: background-color, border-color, translate;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .btn-primary:hover {
-    background-color: rgb(64, 150, 255);
-    border-color: rgb(64, 150, 255);
-    translate: 0 -1px;
+    background-color: rgb(61, 142, 240);
+    border-color: rgb(91, 163, 245);
+    translate: 0 -2px;
 }
 .btn-primary:active {
     background-color: rgb(9, 88, 217);
     border-color: rgb(9, 88, 217);
-    scale: 0.97 0.97;
     translate: 0 0;
 }
 
-/* ── SECONDARY BUTTON ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   SECONDARY BUTTON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .btn-secondary {
     font-size: 11px;
     letter-spacing: 0.15px;
-    background-color: rgba(22, 119, 255, 0.08);
-    color: rgba(255, 255, 255, 0.78);
-    border-color: rgba(22, 119, 255, 0.28);
+    background-color: rgba(9, 24, 40, 0.95);
+    color: rgba(255, 255, 255, 0.72);
+    border-color: rgba(22, 119, 255, 0.25);
     border-width: 1px;
-    border-radius: 6px;
-    transition-property: background-color, border-color, color, scale;
-    transition-duration: 150ms;
+    border-radius: 7px;
+    transition-property: background-color, border-color, color, translate;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .btn-secondary:hover {
-    background-color: rgba(22, 119, 255, 0.16);
+    background-color: rgba(22, 119, 255, 0.14);
     color: rgba(255, 255, 255, 0.95);
     border-color: rgba(22, 119, 255, 0.55);
-    translate: 0 -1px;
+    translate: 0 -2px;
 }
 .btn-secondary:active {
-    background-color: rgba(22, 119, 255, 0.24);
-    scale: 0.97 0.97;
+    background-color: rgba(22, 119, 255, 0.22);
     translate: 0 0;
 }
 
-/* ── GHOST BUTTON ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   GHOST BUTTON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .btn-ghost {
     font-size: 10px;
     letter-spacing: 0.1px;
     background-color: rgba(0, 0, 0, 0);
-    color: rgba(255, 255, 255, 0.38);
-    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.35);
+    border-color: rgba(255, 255, 255, 0.08);
     border-width: 1px;
-    border-radius: 6px;
+    border-radius: 7px;
     transition-property: background-color, border-color, color;
-    transition-duration: 150ms;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .btn-ghost:hover {
     background-color: rgba(255, 255, 255, 0.05);
     color: rgba(255, 255, 255, 0.65);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.18);
 }
 .btn-ghost:active {
-    scale: 0.97 0.97;
+    background-color: rgba(255, 255, 255, 0.08);
 }
 
-/* ── BUILD CTA BUTTON ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   BUILD CTA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .btn-build {
-    height: 42px;
-    margin-top: 10px;
+    height: 44px;
+    margin-top: 12px;
     font-size: 13px;
-    letter-spacing: 0.4px;
-    border-radius: 7px;
-
+    letter-spacing: 0.5px;
+    border-radius: 8px;
+    border-color: rgba(22, 119, 255, 0.80);
+}
+.btn-build:hover {
+    border-color: rgba(91, 163, 245, 1.0);
 }
 
-/* ── IMPORT 2열 행 ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   IMPORT ROW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .btn-row {
     flex-direction: row;
     margin-bottom: 4px;
 }
-.btn-row > .btn-secondary {
-    flex: 1;
-}
-.btn-row > .btn-secondary:first-child {
-    margin-right: 4px;
-}
+.btn-row > .btn-secondary { flex: 1; }
+.btn-row > .btn-secondary:first-child { margin-right: 4px; }
 
-/* ── TAB BUTTONS ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB BUTTONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .tab-btn {
     flex: 1;
     height: 32px;
-    font-size: 11px;
-    letter-spacing: 0.15px;
+    font-size: 10px;
+    letter-spacing: 0.4px;
     background-color: rgba(0, 0, 0, 0);
-    color: rgba(255, 255, 255, 0.4);
+    color: rgba(255, 255, 255, 0.38);
     border-width: 0;
     border-radius: 0;
-    transition-property: color, border-bottom-color;
-    transition-duration: 150ms;
+    transition-property: color, background-color, border-bottom-color;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .tab-btn:hover {
-    color: rgba(255, 255, 255, 0.72);
-    background-color: rgba(255, 255, 255, 0.03);
+    color: rgba(255, 255, 255, 0.75);
+    background-color: rgba(22, 119, 255, 0.06);
 }
 .tab-btn--active {
     color: rgba(255, 255, 255, 0.95);
     border-bottom-color: rgb(22, 119, 255);
     border-bottom-width: 2px;
-
+    background-color: rgba(22, 119, 255, 0.08);
 }
 
-/* ── VIEWER OVERLAY BUTTONS ── */
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   VIEWER OVERLAY BUTTONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .viewer-btn {
-    width: 68px;
     height: 30px;
-    font-size: 11px;
-    letter-spacing: 0.1px;
-    background-color: rgba(6, 13, 27, 0.86);
-    color: rgba(255, 255, 255, 0.72);
-    border-color: rgba(22, 119, 255, 0.25);
+    font-size: 10px;
+    letter-spacing: 0.15px;
+    background-color: rgba(3, 11, 25, 0.88);
+    color: rgba(255, 255, 255, 0.68);
+    border-color: rgba(22, 119, 255, 0.22);
     border-width: 1px;
-    border-radius: 5px;
-    transition-property: background-color, border-color, color, scale;
-    transition-duration: 150ms;
+    border-radius: 6px;
+    padding-left: 10px;
+    padding-right: 10px;
+    transition-property: background-color, border-color, color, translate;
+    transition-duration: 200ms;
     transition-timing-function: ease-out;
 }
 .viewer-btn:hover {
-    background-color: rgba(22, 119, 255, 0.2);
-    color: rgb(255, 255, 255);
+    background-color: rgba(22, 119, 255, 0.18);
+    color: rgba(255, 255, 255, 0.95);
     border-color: rgba(22, 119, 255, 0.65);
-    translate: 0 -1px;
+    translate: 0 -2px;
 }
 .viewer-btn:active {
-    scale: 0.95 0.95;
     translate: 0 0;
+    background-color: rgba(22, 119, 255, 0.28);
 }
-
 .viewer-btn--dim {
-    width: 110px;
-    color: rgba(255, 255, 255, 0.38);
-    border-color: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.35);
+    border-color: rgba(255, 255, 255, 0.09);
 }
 .viewer-btn--dim:hover {
     background-color: rgba(255, 255, 255, 0.07);
-    color: rgba(255, 255, 255, 0.68);
-    border-color: rgba(255, 255, 255, 0.25);
+    color: rgba(255, 255, 255, 0.70);
+    border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   MESH GROUP (Layer panel)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.mesh-group {
+    background-color: rgba(9, 24, 40, 0.60);
+    border-radius: 7px;
+    border-color: rgba(22, 119, 255, 0.10);
+    border-width: 1px;
+    margin-bottom: 6px;
+    overflow: hidden;
+}
+.mesh-group-header {
+    padding-top: 7px;
+    padding-bottom: 7px;
+    padding-left: 10px;
+    padding-right: 8px;
+    background-color: rgba(22, 119, 255, 0.07);
+    border-bottom-color: rgba(22, 119, 255, 0.10);
+    border-bottom-width: 1px;
+    transition-property: background-color;
+    transition-duration: 180ms;
+    transition-timing-function: ease-out;
+}
+.mesh-group-header:hover {
+    background-color: rgba(22, 119, 255, 0.13);
+}
+.mesh-group-icon {
+    font-size: 9px;
+    color: rgba(22, 119, 255, 0.60);
+    margin-right: 5px;
+    width: 12px;
+}
+.mesh-group-label {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.80);
+    letter-spacing: 0.2px;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   MESH ENTRY ROWS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.mesh-entry-list {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+.mesh-entry {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 10px;
+    padding-right: 6px;
+    border-radius: 0;
+    transition-property: background-color;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+}
+.mesh-entry:hover {
+    background-color: rgba(22, 119, 255, 0.08);
+}
+.mesh-entry--selected {
+    background-color: rgba(22, 119, 255, 0.15);
+    border-left-color: rgb(22, 119, 255);
+    border-left-width: 2px;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   INSPECTOR PANEL (fade-in via opacity)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+#mesh-inspector {
+    opacity: 0;
+    transition-property: opacity;
+    transition-duration: 220ms;
+    transition-timing-function: ease-out;
+}
+#mesh-inspector.inspector--visible {
+    opacity: 1;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TAB CONTENT FADE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.tab-content {
+    opacity: 0;
+    transition-property: opacity;
+    transition-duration: 180ms;
+    transition-timing-function: ease-out;
+}
+.tab-content--visible {
+    opacity: 1;
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   LAYER SLOT ROWS (Import status)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.layer-slot-row {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 10px;
+    padding-right: 8px;
+    background-color: rgba(9, 24, 40, 0.55);
+    border-radius: 6px;
+    margin-bottom: 5px;
+    border-color: rgba(22, 119, 255, 0.08);
+    border-width: 1px;
+    transition-property: background-color, border-color;
+    transition-duration: 180ms;
+    transition-timing-function: ease-out;
+}
+.layer-slot-row--loaded {
+    background-color: rgba(22, 119, 255, 0.10);
+    border-color: rgba(22, 119, 255, 0.25);
+}
+.layer-slot-row:hover {
+    background-color: rgba(22, 119, 255, 0.10);
+}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   PARSE STATUS LABEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+#parse-status {
+    font-size: 10px;
+    letter-spacing: 0.1px;
+    color: rgba(22, 119, 255, 0.55);
+    margin-bottom: 10px;
+    white-space: normal;
+    padding-left: 2px;
+    transition-property: color, opacity;
+    transition-duration: 300ms;
+    transition-timing-function: ease-out;
 }

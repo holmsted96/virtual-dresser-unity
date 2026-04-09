@@ -83,10 +83,13 @@ $excludes = @("Library", "Temp", "obj", "Logs", ".vs")
 
 if (Test-Path $converterDest) {
     # 이미 배포된 경우: Library/ 는 건드리지 않고 소스만 업데이트
+    # ⚠️ Copy-Item folder $existingDest -Recurse 하면 $existingDest/folder/ 로 중첩됨
+    #    → 폴더는 내용물(*) 을 복사해야 Assets/Assets/ 같은 중첩을 방지할 수 있음
     Get-ChildItem $converterSrc | Where-Object { $_.Name -notin $excludes } | ForEach-Object {
         $dest = Join-Path $converterDest $_.Name
         if ($_.PSIsContainer) {
-            Copy-Item $_.FullName $dest -Recurse -Force
+            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+            Copy-Item "$($_.FullName)\*" $dest -Recurse -Force
         } else {
             Copy-Item $_.FullName $dest -Force
         }
@@ -106,7 +109,8 @@ Write-Host "[2/4] 배포 완료" -ForegroundColor Green
 #   - 스크립트 컴파일
 #   → 이 단계 완료 후 Library/ 캐시가 생성되어 헤들리스 빌드가 빠르게 실행됨
 # ─────────────────────────────────────────
-$libraryPath = Join-Path $converterDest "Library"
+$libraryPath     = Join-Path $converterDest "Library"
+$embeddedPkgDest = Join-Path $converterDest "Packages\app.warudo.modtool"
 
 if ($SkipWarmup) {
     Write-Host "[3/4] 워밍업 스킵 (-SkipWarmup)" -ForegroundColor Yellow
@@ -138,6 +142,34 @@ if ($SkipWarmup) {
 }
 
 # ─────────────────────────────────────────
+# [3.5/4] Warudo SDK → embedded package 변환
+#
+#   목적: 헤들리스 빌드마다 Unity가 git fetch(~90초)를 하는 문제 제거.
+#   방법: Library/PackageCache/app.warudo.modtool@.../  를
+#         Packages/app.warudo.modtool/ 으로 복사 (embedded).
+#         embedded package는 git URL 없이 로컬 디스크에서 바로 로드됨.
+# ─────────────────────────────────────────
+if (-not (Test-Path $embeddedPkgDest)) {
+    $pkgCacheRoot = Join-Path $converterDest "Library\PackageCache"
+    $cachedPkg    = Get-ChildItem $pkgCacheRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like "app.warudo.modtool@*" } |
+                    Select-Object -First 1
+
+    if ($cachedPkg) {
+        Write-Host "[3.5/4] Warudo SDK → embedded package 변환 (git fetch 90초 제거)..." -ForegroundColor Cyan
+        $embeddedParent = Split-Path $embeddedPkgDest -Parent
+        if (-not (Test-Path $embeddedParent)) { New-Item -ItemType Directory -Path $embeddedParent -Force | Out-Null }
+        Copy-Item $cachedPkg.FullName $embeddedPkgDest -Recurse -Force
+        Write-Host "[3.5/4] embedded package 완료: $embeddedPkgDest" -ForegroundColor Green
+        Write-Host "        다음 빌드부터 Package Manager 해석 시간 ~90초 절약됩니다." -ForegroundColor Green
+    } else {
+        Write-Host "[3.5/4] PackageCache에 app.warudo.modtool 없음 — 스킵 (워밍업 후 재시도)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[3.5/4] Embedded package 이미 존재 — 스킵" -ForegroundColor Green
+}
+
+# ─────────────────────────────────────────
 # [4/4] 완료 요약
 # ─────────────────────────────────────────
 Write-Host ""
@@ -148,6 +180,9 @@ Write-Host ""
 if (-not (Test-Path $libraryPath)) {
     Write-Host "NOTE: 워밍업이 완료되지 않았습니다." -ForegroundColor Yellow
     Write-Host "      첫 .warudo 빌드 시 3~8분 소요될 수 있습니다." -ForegroundColor Yellow
+} elseif (Test-Path $embeddedPkgDest) {
+    Write-Host "NOTE: .warudo 빌드 준비 완료. Package Manager 캐시 적용됨." -ForegroundColor Cyan
+    Write-Host "      예상 빌드 시간: ~1분 (기존 ~3분에서 단축)." -ForegroundColor Cyan
 } else {
     Write-Host "NOTE: .warudo 빌드 준비 완료. 빌드 시간 약 1~2분." -ForegroundColor Cyan
 }

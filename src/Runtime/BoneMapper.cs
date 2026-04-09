@@ -54,11 +54,12 @@ namespace VirtualDresser.Runtime
         };
 
         /// <summary>
-        /// FBX 루트 Transform에서 HumanoidBones 매핑 수행
+        /// FBX 루트 Transform에서 HumanoidBones 매핑 수행.
+        /// config가 있으면 boneMap alias를 먼저 시도 (아바타별 본 이름 우선).
         /// bone-mapper.ts mapUnityBonesToHumanoid() 포팅
         /// </summary>
         /// <returns>humanoidKey → Transform 매핑, 또는 필수 본 부족 시 null</returns>
-        public static Dictionary<string, Transform> MapToHumanoid(Transform root)
+        public static Dictionary<string, Transform> MapToHumanoid(Transform root, AvatarConfig config = null)
         {
             // 모든 자식 본 수집
             var allBones = new Dictionary<string, Transform>(StringComparer.Ordinal);
@@ -70,12 +71,50 @@ namespace VirtualDresser.Runtime
                 return null;
             }
 
+            // config.boneMap: PascalCase("LeftUpperArm") → camelCase("leftUpperArm") 변환 캐시
+            // e.g. "LeftUpperArm": ["Left arm", "Upper_arm.L", ...]
+            var configAliasMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            if (config?.boneMap != null)
+            {
+                foreach (var (key, aliases) in config.boneMap)
+                    if (aliases != null && aliases.Count > 0)
+                        configAliasMap[key] = aliases;
+            }
+
             var result = new Dictionary<string, Transform>();
             var usedBones = new HashSet<string>();
 
             foreach (var (humanoidKey, candidates) in HumanoidBoneCandidates)
             {
-                // 1단계: 정확 매칭
+                // 0단계: AvatarConfig boneMap alias 우선 (아바타별 정확한 본 이름)
+                if (configAliasMap.TryGetValue(humanoidKey, out var configAliases))
+                {
+                    foreach (var alias in configAliases)
+                    {
+                        if (allBones.TryGetValue(alias, out var bone) && !usedBones.Contains(alias))
+                        {
+                            result[humanoidKey] = bone;
+                            usedBones.Add(alias);
+                            goto nextKey;
+                        }
+                    }
+                    // 대소문자 무시로도 시도
+                    foreach (var alias in configAliases)
+                    {
+                        foreach (var (boneName, bone) in allBones)
+                        {
+                            if (string.Equals(boneName, alias, StringComparison.OrdinalIgnoreCase)
+                                && !usedBones.Contains(boneName))
+                            {
+                                result[humanoidKey] = bone;
+                                usedBones.Add(boneName);
+                                goto nextKey;
+                            }
+                        }
+                    }
+                }
+
+                // 1단계: 정확 매칭 (범용 후보)
                 foreach (var candidate in candidates)
                 {
                     if (allBones.TryGetValue(candidate, out var bone) && !usedBones.Contains(candidate))
