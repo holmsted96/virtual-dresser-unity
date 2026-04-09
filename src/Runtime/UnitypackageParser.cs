@@ -324,8 +324,21 @@ namespace VirtualDresser.Runtime
 
             if (!found)
             {
-                // .mat에 텍스처 GUID가 없는 경우(외부 패키지 참조 등) — 이름 기반 fallback
-                Debug.LogWarning($"[Parser] .mat '{matName}': GUID 매핑 실패, 이름 기반 fallback");
+                // 진단: 실패 원인 상세 출력
+                int guidCount = 0;
+                int resolvedCount = 0;
+                foreach (var line in matContent.Split('\n'))
+                {
+                    if (!line.Contains("guid:")) continue;
+                    var m = GuidRegex.Match(line);
+                    if (!m.Success) continue;
+                    guidCount++;
+                    if (guidToPathname.ContainsKey(m.Groups[1].Value)) resolvedCount++;
+                    else Debug.LogWarning($"[Parser] .mat '{matName}': 외부 GUID 참조 → {m.Groups[1].Value} (패키지 내 없음)");
+                }
+                Debug.LogWarning($"[Parser] .mat '{matName}': GUID 매핑 실패 — " +
+                                 $"GUID 참조 {guidCount}개 중 {resolvedCount}개만 이 패키지 내 존재. " +
+                                 "텍스처가 별도 패키지로 분리됐거나 외부 참조일 가능성.");
                 return null;
             }
 

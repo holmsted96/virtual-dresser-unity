@@ -180,6 +180,12 @@ namespace VirtualDresser.Runtime
 
             Debug.Log($"[MaterialManager] 로드된 텍스처 {textures.Count}장");
 
+            // 진단: 추출된 텍스처 이름 목록
+            Debug.Log($"[MatMgr] 텍스처 파일 {textures.Count}장: " +
+                      string.Join(", ", textures.Keys.Take(12)));
+            Debug.Log($"[MatMgr] .mat 맵 키 {parseResult.MaterialTextureMap.Count}개: " +
+                      string.Join(", ", parseResult.MaterialTextureMap.Keys.Take(12)));
+
             int applied = 0;
             foreach (var smr in renderers)
             {
@@ -203,6 +209,7 @@ namespace VirtualDresser.Runtime
 
                 // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
                 var matchKey = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
+                Debug.Log($"[MatMgr] 처리: SMR='{smr.name}' → mat='{mat.name}' → matchKey='{matchKey}'");
                 var matched = ApplyTexturesToMaterial(mat, matchKey, textures, parseResult);
                 if (matched) applied++;
             }
