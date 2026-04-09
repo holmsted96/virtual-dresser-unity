@@ -45,3 +45,9 @@ Thumbs.db
 *.cache
 temp/
 cache/
+
+# vd-warudo-converter — 빌드 시 생성되는 런타임 폴더
+vd-warudo-converter/Assets/VDImport_*/
+vd-warudo-converter/Assets/VDImport_*.meta
+vd-warudo-converter/Assets/Packages/
+vd-warudo-converter/Assets/Packages.meta
