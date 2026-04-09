@@ -237,6 +237,38 @@
   "blendShapeMap": {},
   "_comment_physics": "루미나 물리 본: Knee_HighSocks, Leg_Belt 체인",
   "physicsConfig": {},
-  "_comment_materials": "TODO: 아바타별 머티리얼 이름과 프로퍼티 매핑 필요",
-  "materialConfig": {}
+  "_comment_materials": "TriLib이 로드한 FBX 내부 머티리얼명 → .mat 파일명 매핑 (externalObjects 없으므로 수동 정의)",
+  "materialConfig": {
+    "smrToMat": {
+      "Body":             "Body_1",
+      "Body_2":           "Body_2",
+      "Body_2_Alpha":     "Body_2_Alpha",
+      "Body_Secondary":   "Body_Secondary",
+      "Mofu_Ear":         "Mofu_EarTail",
+      "Mofu_Tail":        "Mofu_EarTail",
+      "Hair_Back":        "Hair",
+      "Hair_Bang":        "Hair",
+      "Hair_Side L":      "Hair",
+      "Hair_Side R":      "Hair",
+      "Cloth_Bra":        "UnderWear",
+      "Cloth_Garter":     "UnderWear",
+      "Cloth_Inner":      "Cloth",
+      "Cloth_KneeHigh_Socks": "Tights",
+      "Cloth_Leather_Bag": "Cloth",
+      "Cloth_Outer":      "Cloth",
+      "Cloth_Rings":      "Cloth_Gem",
+      "Cloth_Shorts":     "UnderWear",
+      "Cloth_ShortBoots": "Cloth",
+      "Cloth_Earrings":   "Cloth_LowPoly_Chain"
+    },
+    "matNameToMat": {
+      "Under Wear":  "UnderWear",
+      "Gem":         "Cloth_Gem",
+      "Low Poly C":  "Cloth_LowPoly_Chain",
+      "マテリアル":   "Cloth",
+      "Tights":      "Tights",
+      "Hair":        "Hair",
+      "Mofu_Ear_Tail": "Mofu_EarTail"
+    }
+  }
 }

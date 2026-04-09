@@ -95,15 +95,23 @@ namespace VirtualDresser.Runtime
             EnsureShaders();
             var lower = meshName.ToLowerInvariant();
 
+            // 눈/아이리스/동공: transparent (헤어보다 먼저 체크 — Eye_Hair 같은 경우 방지)
+            // 단, "eyelash"는 cutout이므로 제외
+            if ((lower.Contains("eye") || lower.Contains("iris") || lower.Contains("pupil"))
+                && !lower.Contains("eyelash") && !lower.Contains("lash"))
+                return _shaderLilToonTransparent;
+
             // 헤어/속눈썹: alpha cutout
             if (lower.Contains("hair") || lower.Contains("wig") || lower.Contains("kami")
                 || lower.Contains("eyelash") || lower.Contains("lash"))
                 return _shaderLilToonCutout;
 
-            // 눈/아이리스/동공: transparent
-            if (lower.Contains("eye") || lower.Contains("iris") || lower.Contains("pupil"))
+            // Alpha/transparent 접미사 → transparent
+            if (lower.EndsWith("_alpha") || lower.EndsWith("alpha") || lower.Contains("_trans")
+                || lower.Contains("tights") || lower.Contains("stocking"))
                 return _shaderLilToonTransparent;
 
+            // 그 외(얼굴, 몸통, 의상 등): opaque
             return _shaderLilToon;
         }
 
@@ -154,10 +162,12 @@ namespace VirtualDresser.Runtime
                 mat.DisableKeyword("_ALPHATEST_ON");
                 mat.DisableKeyword("_ALPHABLEND_ON");
                 mat.renderQueue = 2000;
+                // ZWrite 활성화 (투명/반투명 설정이 남아있으면 opaque가 배경으로 렌더됨)
+                if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 1f);
             }
         }
 
-        public static async Task ApplyTexturesAsync(GameObject go, ParseResult parseResult)
+        public static async Task ApplyTexturesAsync(GameObject go, ParseResult parseResult, AvatarConfig config = null)
         {
             if (go == null || parseResult == null) return;
 
@@ -180,41 +190,119 @@ namespace VirtualDresser.Runtime
 
             Debug.Log($"[MaterialManager] 로드된 텍스처 {textures.Count}장");
 
-            // 진단: 추출된 텍스처 이름 목록
+            // 진단: 추출된 텍스처 이름 목록 (전체 출력)
             Debug.Log($"[MatMgr] 텍스처 파일 {textures.Count}장: " +
-                      string.Join(", ", textures.Keys.Take(12)));
-            Debug.Log($"[MatMgr] .mat 맵 키 {parseResult.MaterialTextureMap.Count}개: " +
-                      string.Join(", ", parseResult.MaterialTextureMap.Keys.Take(12)));
+                      string.Join(", ", textures.Keys));
+            Debug.Log($"[MatMgr] .mat 맵 키 {parseResult.MaterialTextureMap.Count}개 (전체): " +
+                      string.Join(", ", parseResult.MaterialTextureMap.Keys));
+            if (parseResult.FbxMaterialMap.Count > 0)
+                Debug.Log($"[MatMgr] FbxMaterialMap {parseResult.FbxMaterialMap.Count}개: " +
+                          string.Join(", ", parseResult.FbxMaterialMap.Select(kv => $"'{kv.Key}'→'{kv.Value}'")));
 
             int applied = 0;
+            int totalMats = 0;
             foreach (var smr in renderers)
             {
-                var mat = smr.sharedMaterial;
-                if (mat == null) continue;
+                var mats = smr.sharedMaterials; // 멀티-머티리얼 지원
+                if (mats == null || mats.Length == 0) continue;
 
-                // ── 셰이더 교체 (lilToon이 있을 때만) ──
-                var lilShader = GetLilToonShader(smr.name);
-                if (lilShader != null)
+                for (int mi = 0; mi < mats.Length; mi++)
                 {
-                    if (mat.shader != lilShader)
-                        mat.shader = lilShader;
-                    InitLilToonDefaults(mat, lilShader);
+                    var mat = mats[mi];
+                    if (mat == null) continue;
+                    totalMats++;
+
+                    // ── 셰이더 교체 (lilToon이 있을 때만) ──
+                    // mat.name이 더 구체적이므로 우선 사용, fallback으로 smr.name
+                    var shaderHint = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
+                    var lilShader = GetLilToonShader(shaderHint);
+                    if (lilShader != null)
+                    {
+                        if (mat.shader != lilShader)
+                            mat.shader = lilShader;
+                        InitLilToonDefaults(mat, lilShader);
+                    }
+                    // lilToon 없으면 TriLib이 설정한 셰이더 그대로 사용
+                    // (교체 시 Standalone에서 셰이더 strip으로 메시 완전 비가시 발생)
+
+                    // 어떤 셰이더든 _Color / _BaseColor 흰색 보장
+                    if (mat.HasProperty("_Color"))    mat.SetColor("_Color",    Color.white);
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+
+                    // 매칭 키 결정 (우선순위 순)
+                    var rawKey   = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
+                    var matchKey = rawKey;
+
+                    // 0단계: config.materialConfig.smrToMat — SMR 이름으로 직접 매핑 (최우선)
+                    var matCfg = config?.materialConfig;
+                    if (matCfg?.smrToMat != null &&
+                        matCfg.smrToMat.TryGetValue(smr.name, out var smrMapped))
+                    {
+                        matchKey = smrMapped;
+                    }
+                    // 1단계: config.materialConfig.matNameToMat — FBX mat 이름 변환
+                    else if (matCfg?.matNameToMat != null &&
+                             matCfg.matNameToMat.TryGetValue(rawKey, out var matMapped))
+                    {
+                        matchKey = matMapped;
+                    }
+                    // 2단계: FbxMaterialMap (externalObjects 기반)
+                    else if (parseResult.FbxMaterialMap.TryGetValue(rawKey, out var fbxMapped))
+                    {
+                        matchKey = fbxMapped;
+                    }
+
+                    Debug.Log($"[MatMgr] 처리: SMR='{smr.name}'[{mi}] → mat='{mat.name}' → matchKey='{matchKey}'" +
+                              (matchKey != rawKey ? $" (변환됨)" : ""));
+                    var matched = ApplyTexturesToMaterial(mat, matchKey, textures, parseResult);
+
+                    // fallback 1: SMR 이름으로 재시도 (FBX mat 이름과 .mat 파일명이 완전히 다를 때)
+                    if (!matched && smr.name != matchKey)
+                        matched = ApplyTexturesToMaterial(mat, smr.name, textures, parseResult);
+
+                    // fallback 2: SMR 이름의 prefix(Cloth_, Hair_ 등)로 .mat 맵 키 유사도 조회
+                    if (!matched)
+                    {
+                        var smrBase = smr.name.Split('_')[0]; // "Cloth_Bra" → "Cloth"
+                        if (smrBase.Length >= 3)
+                        {
+                            var bestKey = parseResult.MaterialTextureMap.Keys
+                                .FirstOrDefault(k => k.StartsWith(smrBase, StringComparison.OrdinalIgnoreCase));
+                            if (bestKey != null)
+                                matched = ApplyTexturesToMaterial(mat, bestKey, textures, parseResult);
+                        }
+                    }
+
+                    if (matched)
+                        applied++;
+                    else
+                    {
+                        // 텍스처 매칭 완전 실패 → _LightMinLimit 높여서 최소한 흰색으로 보이게
+                        if (mat.HasProperty("_LightMinLimit")) mat.SetFloat("_LightMinLimit", 0.7f);
+                    }
                 }
-                // lilToon 없으면 TriLib이 설정한 셰이더 그대로 사용
-                // (교체 시 Standalone에서 셰이더 strip으로 메시 완전 비가시 발생)
-
-                // 어떤 셰이더든 _Color / _BaseColor 흰색 보장
-                if (mat.HasProperty("_Color"))    mat.SetColor("_Color",    Color.white);
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
-
-                // 매칭 키: 머티리얼 이름 우선, 없으면 메시 이름
-                var matchKey = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
-                Debug.Log($"[MatMgr] 처리: SMR='{smr.name}' → mat='{mat.name}' → matchKey='{matchKey}'");
-                var matched = ApplyTexturesToMaterial(mat, matchKey, textures, parseResult);
-                if (matched) applied++;
             }
 
-            Debug.Log($"[MaterialManager] {applied}/{renderers.Length}개 메쉬에 lilToon + 텍스처 적용 완료");
+            Debug.Log($"[MaterialManager] {applied}/{totalMats}개 머티리얼에 lilToon + 텍스처 적용 완료");
+
+            // 진단: SMR별 최종 텍스처 적용 상태 요약 (멀티-머티리얼 포함)
+            var summaryParts = renderers.Select(r =>
+            {
+                var mats = r.sharedMaterials;
+                if (mats == null || mats.Length == 0) return $"{r.name}(NO MATS)";
+                var texInfos = string.Join("|", mats.Select(m =>
+                    m == null ? "null" : (m.mainTexture?.name ?? "NO TEX")));
+                return $"{r.name}[{mats.Length}]({texInfos})";
+            }).ToArray();
+            Debug.Log($"[MatMgr] 적용 요약: {string.Join(", ", summaryParts)}");
+
+            // NO TEX 목록만 별도 출력 (누락 SMR 빠른 진단용)
+            var noTex = renderers
+                .Where(r => r.sharedMaterials?.Any(m => m != null && m.mainTexture == null) == true)
+                .Select(r => r.name)
+                .ToArray();
+            if (noTex.Length > 0)
+                Debug.LogWarning($"[MatMgr] 텍스처 없는 SMR ({noTex.Length}개): {string.Join(", ", noTex)}");
         }
 
         private static bool ApplyTexturesToMaterial(
@@ -435,6 +523,15 @@ namespace VirtualDresser.Runtime
                 return null;
             }
 
+            // PSD 파일은 LoadImage()가 지원 안 됨 → 전용 파서 사용
+            if (filePath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase))
+            {
+                var psdTex = LoadPsdTexture(bytes);
+                if (psdTex == null)
+                    Debug.LogWarning($"[MaterialManager] PSD 로드 실패: {Path.GetFileName(filePath)}");
+                return psdTex;
+            }
+
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
             if (!tex.LoadImage(bytes, false))
             {
@@ -465,6 +562,128 @@ namespace VirtualDresser.Runtime
             tex.Apply();
             return tex;
         }
+
+        // ─── PSD 파서 (merged composite, 8-bit RGB/RGBA) ───
+
+        /// <summary>
+        /// PSD 파일의 merged composite 이미지를 Texture2D로 변환.
+        /// Texture2D.LoadImage()는 PSD 미지원 → 수동 파싱.
+        /// 지원: 8-bit RGB/RGBA, Raw 또는 PackBits RLE 압축.
+        /// </summary>
+        private static Texture2D LoadPsdTexture(byte[] bytes)
+        {
+            try
+            {
+                if (bytes.Length < 26) return null;
+                // Signature check: "8BPS"
+                if (bytes[0] != 0x38 || bytes[1] != 0x42 || bytes[2] != 0x50 || bytes[3] != 0x53) return null;
+
+                int pos = 4;
+                int version   = ReadBE16(bytes, pos); pos += 2;
+                if (version != 1) return null;
+                pos += 6; // reserved
+
+                int channels  = ReadBE16(bytes, pos); pos += 2;
+                int height    = ReadBE32(bytes, pos); pos += 4;
+                int width     = ReadBE32(bytes, pos); pos += 4;
+                int depth     = ReadBE16(bytes, pos); pos += 2;
+                int colorMode = ReadBE16(bytes, pos); pos += 2;
+
+                if (depth != 8 || colorMode != 3) // only 8-bit RGB
+                {
+                    Debug.LogWarning($"[MaterialManager] PSD: 지원 안 되는 포맷 depth={depth} colorMode={colorMode}");
+                    return null;
+                }
+
+                // Skip color mode data
+                int len = ReadBE32(bytes, pos); pos += 4 + len;
+                // Skip image resources
+                len = ReadBE32(bytes, pos); pos += 4 + len;
+                // Skip layer and mask info
+                len = ReadBE32(bytes, pos); pos += 4 + len;
+
+                int compression = ReadBE16(bytes, pos); pos += 2;
+                int pixCount    = width * height;
+
+                byte[] rCh = new byte[pixCount];
+                byte[] gCh = new byte[pixCount];
+                byte[] bCh = new byte[pixCount];
+                byte[] aCh = channels >= 4 ? new byte[pixCount] : null;
+
+                if (compression == 0) // Raw
+                {
+                    Buffer.BlockCopy(bytes, pos, rCh, 0, pixCount); pos += pixCount;
+                    Buffer.BlockCopy(bytes, pos, gCh, 0, pixCount); pos += pixCount;
+                    Buffer.BlockCopy(bytes, pos, bCh, 0, pixCount); pos += pixCount;
+                    if (aCh != null) Buffer.BlockCopy(bytes, pos, aCh, 0, pixCount);
+                }
+                else if (compression == 1) // PackBits RLE
+                {
+                    // Skip row byte counts table: 2 bytes * channels * height
+                    pos += 2 * channels * height;
+
+                    void DecodeRle(byte[] dest)
+                    {
+                        int written = 0;
+                        while (written < pixCount && pos < bytes.Length)
+                        {
+                            int header = (sbyte)bytes[pos++];
+                            if (header == -128) continue;
+                            if (header >= 0)
+                            {
+                                int count = header + 1;
+                                for (int i = 0; i < count && written < pixCount; i++)
+                                    dest[written++] = bytes[pos++];
+                            }
+                            else
+                            {
+                                int count = -header + 1;
+                                byte val  = bytes[pos++];
+                                for (int i = 0; i < count && written < pixCount; i++)
+                                    dest[written++] = val;
+                            }
+                        }
+                    }
+
+                    DecodeRle(rCh);
+                    DecodeRle(gCh);
+                    DecodeRle(bCh);
+                    if (aCh != null) DecodeRle(aCh);
+                }
+                else
+                {
+                    Debug.LogWarning($"[MaterialManager] PSD: 지원 안 되는 압축 방식 {compression}");
+                    return null;
+                }
+
+                // PSD = top-to-bottom, Unity = bottom-to-top → Y 뒤집기
+                var tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                var pixels = new Color32[pixCount];
+                for (int y = 0; y < height; y++)
+                {
+                    int srcRow = y * width;
+                    int dstRow = (height - 1 - y) * width;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int s = srcRow + x;
+                        int d = dstRow + x;
+                        pixels[d] = new Color32(rCh[s], gCh[s], bCh[s], aCh != null ? aCh[s] : (byte)255);
+                    }
+                }
+                tex.SetPixels32(pixels);
+                tex.Apply();
+                Debug.Log($"[MaterialManager] PSD 로드 성공: {width}×{height} ch={channels}");
+                return tex;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MaterialManager] PSD 파싱 오류: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static int ReadBE16(byte[] b, int pos) => (b[pos] << 8) | b[pos + 1];
+        private static int ReadBE32(byte[] b, int pos) => (b[pos] << 24) | (b[pos+1] << 16) | (b[pos+2] << 8) | b[pos+3];
 
         // ─── 유틸리티 ───
 
