@@ -487,7 +487,7 @@ namespace VirtualDresser.UI
                     Debug.LogWarning($"[DresserUI] AvatarConfig 없음 (DetectedName={result.DetectedName}) — 이름 완전 일치만 사용");
 
                 ShowLoading("Importing Avatar", "Applying textures & materials...", 0.70f);
-                await MaterialManager.ApplyTexturesAsync(go, result);
+                await MaterialManager.ApplyTexturesAsync(go, result, _currentAvatarConfig);
 
                 ShowLoading("Importing Avatar", "Finalizing...", 0.92f);
                 RegisterMeshGroup("avatar", displayName, go);
@@ -513,46 +513,64 @@ namespace VirtualDresser.UI
         {
             if (result.ExtractedFbxPaths.Count == 0) { HideLoading(); return; }
 
-            SetParseStatus($"Loading clothing: {displayName}...");
-            ShowLoading("Importing Clothing", "Loading FBX model...", 0.45f);
-            try
-            {
-                var go = await FbxConverter.LoadFbxAsync(result.ExtractedFbxPaths[0], displayName);
-                if (go == null) { HideLoading(); SetParseStatus("Clothing FBX load failed"); return; }
-                go.transform.SetParent(avatarRoot, false);
-                _clothingGo    = go;
-                _clothingParse = result;
+            // 기존 clothing 그룹 전체 제거 (재임포트 시 초기화)
+            _meshGroups.RemoveAll(g => g.LayerKey == "clothing");
+            _clothingParse = result;
 
-                ShowLoading("Importing Clothing", "Binding bones to avatar...", 0.62f);
-                if (avatarRoot != null)
+            var fbxPaths = result.ExtractedFbxPaths; // 크기 내림차순 정렬된 상태
+            for (int i = 0; i < fbxPaths.Count; i++)
+            {
+                var fbxPath   = fbxPaths[i];
+                var fbxName   = Path.GetFileNameWithoutExtension(fbxPath);
+                // 첫 번째(메인)는 패키지 이름 사용, 나머지는 FBX 파일명 사용
+                var groupName = i == 0 ? displayName : fbxName;
+                var progress  = 0.45f + 0.45f * i / fbxPaths.Count;
+
+                SetParseStatus($"Loading clothing: {groupName}...");
+                ShowLoading("Importing Clothing",
+                    $"Loading FBX {i + 1}/{fbxPaths.Count}: {fbxName}...", progress);
+
+                try
                 {
-                    var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
-                    Debug.Log($"[DresserUI] 의상 바인딩: {stats}");
+                    var go = await FbxConverter.LoadFbxAsync(fbxPath, groupName);
+                    if (go == null)
+                    {
+                        Debug.LogWarning($"[DresserUI] FBX 로드 실패: {fbxPath}");
+                        continue;
+                    }
+                    go.transform.SetParent(avatarRoot, false);
 
-                    var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
-                    if (hidden.Count > 0)
-                        Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
+                    // 첫 번째 FBX만 메인 clothing GO로 등록 (본 바인딩 등 기준)
+                    if (i == 0) _clothingGo = go;
 
-                    var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
-                    if (hint != null)
-                        SetParseStatus($"Clothing loaded: {displayName}\n💡 {hint}");
+                    ShowLoading("Importing Clothing", $"Binding bones: {fbxName}...", progress + 0.1f);
+                    if (avatarRoot != null)
+                    {
+                        var stats = MeshCombiner.BindClothingToAvatar(avatarRoot, go, _currentAvatarConfig);
+                        Debug.Log($"[DresserUI] 바인딩 [{groupName}]: {stats}");
+
+                        if (i == 0)
+                        {
+                            var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
+                            if (hidden.Count > 0)
+                                Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
+                        }
+                    }
+
+                    await MaterialManager.ApplyTexturesAsync(go, result, _currentAvatarConfig);
+
+                    // layerKey: 첫 번째는 "clothing", 나머지는 "clothing_fbxName" (고유 키)
+                    var layerKey = i == 0 ? "clothing" : $"clothing_{fbxName}";
+                    RegisterMeshGroupDirect(layerKey, groupName, go);
                 }
-
-                ShowLoading("Importing Clothing", "Applying textures & materials...", 0.78f);
-                await MaterialManager.ApplyTexturesAsync(go, result);
-
-                ShowLoading("Importing Clothing", "Finalizing...", 0.92f);
-                RegisterMeshGroup("clothing", displayName, go);
-
-                HideLoading();
-                SetParseStatus($"Clothing loaded: {displayName}");
+                catch (Exception e)
+                {
+                    Debug.LogError($"[DresserUI] FBX 로드 실패 [{groupName}]: {e}");
+                }
             }
-            catch (Exception e)
-            {
-                HideLoading();
-                SetParseStatus($"Clothing load failed: {e.Message}");
-                Debug.LogError($"[DresserUI] Clothing load failed: {e}");
-            }
+
+            HideLoading();
+            SetParseStatus($"Clothing loaded: {displayName} ({fbxPaths.Count} FBX)");
         }
 
         private async void LoadHairFbx(ParseResult result, string displayName)
@@ -577,7 +595,7 @@ namespace VirtualDresser.UI
                 }
 
                 ShowLoading("Importing Hair", "Applying textures & materials...", 0.80f);
-                await MaterialManager.ApplyTexturesAsync(go, result);
+                await MaterialManager.ApplyTexturesAsync(go, result, _currentAvatarConfig);
 
                 ShowLoading("Importing Hair", "Finalizing...", 0.92f);
                 SuggestHideAvatarHair();
@@ -611,7 +629,7 @@ namespace VirtualDresser.UI
             ShowLoading("Importing Material", "Applying textures & materials...", 0.70f);
             try
             {
-                await MaterialManager.ApplyTexturesAsync(_clothingGo, result);
+                await MaterialManager.ApplyTexturesAsync(_clothingGo, result, _currentAvatarConfig);
                 HideLoading();
                 SetParseStatus($"Material applied: {displayName}");
             }
@@ -631,25 +649,34 @@ namespace VirtualDresser.UI
         /// </summary>
         public void RegisterMeshGroup(string layerKey, string displayName, GameObject loadedGo)
         {
-            // 기존 동일 레이어 그룹이 있으면 교체
+            // 기존 동일 레이어 그룹 전체 교체 (avatar/hair 용)
             _meshGroups.RemoveAll(g => g.LayerKey == layerKey);
+            RegisterMeshGroupDirect(layerKey, displayName, loadedGo);
+        }
 
+        /// <summary>
+        /// 기존 그룹을 지우지 않고 새 그룹을 추가. 여러 FBX를 순차 등록할 때 사용.
+        /// </summary>
+        private void RegisterMeshGroupDirect(string layerKey, string displayName, GameObject loadedGo)
+        {
             var group = new MeshGroup(layerKey, displayName);
-
             foreach (var smr in loadedGo.GetComponentsInChildren<SkinnedMeshRenderer>(true))
-            {
                 group.Entries.Add(new MeshEntry(smr.name, layerKey, smr));
-            }
 
-            // 순서 보장: avatar → clothing → hair
+            // 순서: avatar → clothing* → hair*
             _meshGroups.Add(group);
             _meshGroups.Sort((a, b) =>
-                Array.IndexOf(SlotTypes, a.LayerKey)
-                    .CompareTo(Array.IndexOf(SlotTypes, b.LayerKey)));
+            {
+                string BaseKey(string k) => k.StartsWith("clothing") ? "clothing"
+                                          : k.StartsWith("hair")     ? "hair"
+                                          : k;
+                return Array.IndexOf(SlotTypes, BaseKey(a.LayerKey))
+                    .CompareTo(Array.IndexOf(SlotTypes, BaseKey(b.LayerKey)));
+            });
 
             RefreshMeshPanel();
             RefreshLayerPanel();
-            SwitchTab("layer");  // 로드 완료 후 레이어 탭으로 자동 전환
+            SwitchTab("layer");
         }
 
         // ─── 레이어 패널 렌더 ───
@@ -724,7 +751,7 @@ namespace VirtualDresser.UI
             foreach (var slot in new[] { "avatar", "clothing", "hair" })
             {
                 var s = slot;
-                var hasGroup = _meshGroups.Any(g => g.LayerKey == s);
+                var hasGroup = _meshGroups.Any(g => g.LayerKey == s || g.LayerKey.StartsWith(s + "_"));
                 var btn = new Button(() => { _meshPanelFilter = s; RefreshMeshPanel(); })
                 {
                     text = LayerDisplayName(s)
@@ -740,7 +767,10 @@ namespace VirtualDresser.UI
             _meshPanelContainer.Add(filterRow);
 
             // ── 현재 필터에 해당하는 그룹만 표시 ──
-            var filtered = _meshGroups.Where(g => g.LayerKey == _meshPanelFilter);
+            // "clothing" 필터는 "clothing_*" 서브그룹도 포함
+            var filtered = _meshGroups.Where(g =>
+                g.LayerKey == _meshPanelFilter ||
+                g.LayerKey.StartsWith(_meshPanelFilter + "_"));
             foreach (var group in filtered)
                 _meshPanelContainer.Add(BuildMeshGroupElement(group));
         }
