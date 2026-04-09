@@ -7,15 +7,16 @@ Shader "VirtualDresser/Outline"
     }
     SubShader
     {
-        // Geometry+100 → 메인 메쉬(기본 Geometry=2000)보다 반드시 나중에 렌더
-        Tags { "RenderType"="Opaque" "Queue"="Geometry+100" }
+        // Overlay(4000): Opaque/Cutout/Transparent 모두 렌더된 뒤 실행
+        // → lilToon Transparent(3000), Cutout(2450) 포함 모든 메쉬 이후에 아웃라인 렌더
+        Tags { "RenderType"="Overlay" "Queue"="Overlay" }
 
         Pass
         {
             Name "OUTLINE"
             Cull Front      // 뒷면만 렌더 → 앞면이 클리핑해 아웃라인 실루엣 생성
-            ZWrite Off      // 깊이 버퍼 안 씀 → 메인 메쉬에 묻히지 않음
-            ZTest LEqual    // 메인 메쉬 깊이 이하이면 출력
+            ZWrite Off      // 깊이 버퍼 안 씀
+            ZTest LEqual    // 메인 메쉬 깊이 이하이면 출력 (아웃라인이 몸 뒤로 안 뚫림)
 
             CGPROGRAM
             #pragma vertex vert

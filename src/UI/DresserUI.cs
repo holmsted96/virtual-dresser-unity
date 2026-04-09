@@ -1562,25 +1562,47 @@ namespace VirtualDresser.UI
         /// </summary>
         private void CreateInspectorPanel()
         {
-            // Build 버튼 바로 위에 삽입
-            var controlPanel = _root.Q<VisualElement>("control-panel");
-            if (controlPanel == null) return;
-
-            _inspectorPanel = new VisualElement();
-            _inspectorPanel.name = "mesh-inspector";
-            _inspectorPanel.style.display         = DisplayStyle.None;
-            _inspectorPanel.style.borderTopWidth  = 1;
-            _inspectorPanel.style.borderTopColor  = new Color(0.086f, 0.467f, 1f, 0.25f);
-            _inspectorPanel.style.paddingTop      = 10;
-            _inspectorPanel.style.paddingBottom   = 8;
-            _inspectorPanel.style.marginBottom    = 8;
-
-            // Build 버튼 앞에 삽입
-            var buildBtn = _root.Q<Button>("build-btn");
-            if (buildBtn != null)
-                controlPanel.Insert(controlPanel.IndexOf(buildBtn), _inspectorPanel);
-            else
+            // viewer-area (왼쪽 뷰포트) 에 absolute 오버레이로 추가
+            // → control-panel flex 레이아웃과 충돌 없이 항상 표시됨
+            var viewerArea = _root.Q<VisualElement>("viewer-area");
+            if (viewerArea == null)
+            {
+                // fallback: control-panel에 추가
+                var controlPanel = _root.Q<VisualElement>("control-panel");
+                if (controlPanel == null) return;
+                _inspectorPanel = new VisualElement();
                 controlPanel.Add(_inspectorPanel);
+            }
+            else
+            {
+                _inspectorPanel = new VisualElement();
+                viewerArea.Add(_inspectorPanel);
+            }
+
+            _inspectorPanel.name = "mesh-inspector";
+            _inspectorPanel.style.display   = DisplayStyle.None;
+            _inspectorPanel.style.position  = Position.Absolute;
+            _inspectorPanel.style.left      = 14;
+            _inspectorPanel.style.bottom    = 80;   // 뷰포트 버튼 위
+            _inspectorPanel.style.width     = 280;
+            _inspectorPanel.style.maxHeight = 340;
+
+            // 반투명 다크 패널
+            _inspectorPanel.style.backgroundColor    = new Color(0.04f, 0.08f, 0.16f, 0.92f);
+            _inspectorPanel.style.borderTopLeftRadius     = 8;
+            _inspectorPanel.style.borderTopRightRadius    = 8;
+            _inspectorPanel.style.borderBottomLeftRadius  = 8;
+            _inspectorPanel.style.borderBottomRightRadius = 8;
+            _inspectorPanel.style.borderTopWidth = _inspectorPanel.style.borderBottomWidth =
+            _inspectorPanel.style.borderLeftWidth = _inspectorPanel.style.borderRightWidth = 1;
+            _inspectorPanel.style.borderTopColor = _inspectorPanel.style.borderBottomColor =
+            _inspectorPanel.style.borderLeftColor = _inspectorPanel.style.borderRightColor
+                = new Color(0.086f, 0.467f, 1f, 0.3f);
+            _inspectorPanel.style.paddingTop    = 10;
+            _inspectorPanel.style.paddingBottom = 10;
+            _inspectorPanel.style.paddingLeft   = 12;
+            _inspectorPanel.style.paddingRight  = 12;
+            _inspectorPanel.style.overflow      = Overflow.Hidden;
         }
 
         /// <summary>
@@ -1721,13 +1743,19 @@ namespace VirtualDresser.UI
                 matSectionLbl.style.marginBottom = 5;
                 _inspectorPanel.Add(matSectionLbl);
 
+                // 머티리얼 목록 — ScrollView로 감싸서 많아도 스크롤 가능
+                var matScroll = new ScrollView(ScrollViewMode.Vertical);
+                matScroll.style.maxHeight = 200;
+                matScroll.style.flexShrink = 1;
+
                 var mats = _selectedEntry.Renderer.sharedMaterials;
                 for (int mi = 0; mi < mats.Length; mi++)
                 {
                     var mat = mats[mi];
                     if (mat == null) continue;
-                    _inspectorPanel.Add(BuildMaterialColorRow(mat, _selectedEntry.Renderer, mi));
+                    matScroll.Add(BuildMaterialColorRow(mat, _selectedEntry.Renderer, mi));
                 }
+                _inspectorPanel.Add(matScroll);
             }
         }
 
