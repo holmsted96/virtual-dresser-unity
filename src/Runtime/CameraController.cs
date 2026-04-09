@@ -129,26 +129,30 @@ namespace VirtualDresser.Runtime
             }
 
             var ray = cam.ScreenPointToRay(screenPos);
-
-            // 씬 내 모든 SMR의 bounds로 후보 목록 수집
             var allSmrs = FindObjectsOfType<SkinnedMeshRenderer>();
-            var candidates = new List<(SkinnedMeshRenderer smr, float dist)>();
+
+            // ── 1단계: ray-bounds 교차 후보 수집 (확장 최소화로 정확도 향상)
+            var candidates = new List<(SkinnedMeshRenderer smr, float worldDist, float screenDist)>();
 
             foreach (var smr in allSmrs)
             {
-                if (smr.gameObject.name == "__outline__") continue;  // 아웃라인 제외
+                if (smr.gameObject.name == "__outline__") continue;
                 if (!smr.gameObject.activeInHierarchy)    continue;
                 if (smr.sharedMesh == null)               continue;
 
-                // SMR world-space bounds 약간 확장 (얇은 메쉬 선택성 향상)
                 var b = smr.bounds;
-                b.Expand(0.08f);
+                b.Expand(0.03f);   // 확장 최소화 (0.08 → 0.03)
 
-                if (b.IntersectRay(ray, out float dist))
-                    candidates.Add((smr, dist));
+                if (!b.IntersectRay(ray, out float worldDist)) continue;
+
+                // ── 2단계: 스크린 스페이스 거리 계산 (bounds 중심 기준)
+                // 카메라에 보이는 위치가 클릭 지점에 얼마나 가까운지 평가
+                var screenCenter = cam.WorldToScreenPoint(b.center);
+                if (screenCenter.z < 0) continue;  // 카메라 뒤
+                float screenDist = Vector2.Distance(screenPos, new Vector2(screenCenter.x, screenCenter.y));
+
+                candidates.Add((smr, worldDist, screenDist));
             }
-
-            Debug.Log($"[CameraController] 클릭 레이캐스트: 후보 {candidates.Count}개 (screenPos={screenPos})");
 
             if (candidates.Count == 0)
             {
@@ -156,10 +160,20 @@ namespace VirtualDresser.Runtime
                 return;
             }
 
-            // 카메라에 가장 가까운 SMR 선택
-            candidates.Sort((a, b) => a.dist.CompareTo(b.dist));
+            // ── 3단계: 스크린 거리가 가장 가까운 것 선택
+            // (world distance 만 보면 겹친 메시에서 뒤쪽이 선택될 수 있음)
+            candidates.Sort((a, b) =>
+            {
+                // 스크린 거리 200px 이내면 world distance 우선 (앞뒤 구분)
+                bool aClose = a.screenDist < 200f;
+                bool bClose = b.screenDist < 200f;
+                if (aClose && bClose)
+                    return a.worldDist.CompareTo(b.worldDist);
+                return a.screenDist.CompareTo(b.screenDist);
+            });
+
             var picked = candidates[0].smr;
-            Debug.Log($"[CameraController] 선택됨: {picked.name}");
+            Debug.Log($"[CameraController] 선택됨: {picked.name} (screen={candidates[0].screenDist:F0}px)");
             OnMeshClicked?.Invoke(picked);
         }
 

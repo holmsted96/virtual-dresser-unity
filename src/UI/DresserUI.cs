@@ -1214,22 +1214,21 @@ namespace VirtualDresser.UI
             WriteExcludeManifest(inputPath);
 
             // ── 헤들리스 빌드 실행 ──
-            // 첫 실행 시 Unity 스크립트 컴파일로 3~5분 소요됨
             bool isFirstRun = !Directory.Exists(
                 Path.Combine(WarudoHeadlessBuilder.ConverterProjectPath, "Library"));
-            var waitMsg = isFirstRun
-                ? "⏳ .warudo building...\n(First run: Unity compile ~3-5 min)"
-                : "⏳ .warudo building... (~1-2 min)";
-            SetParseStatus(waitMsg);
+            var firstRunNote = isFirstRun ? "\n(First run: ~3-5 min)" : "";
+            ShowLoading("Building .warudo", $"Starting...{firstRunNote}", 0.03f);
+            SetParseStatus("⏳ Building .warudo...");
             Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}  (firstRun={isFirstRun})");
 
             WarudoHeadlessBuilder.BuildWarudo(
                 inputPath, outputPath, avatarName,
-                (result, error) =>
+                onComplete: (result, error) =>
                 {
                     // 콜백은 백그라운드 스레드에서 오므로 메인 스레드로 디스패치
                     UnityMainThreadDispatcher.Enqueue(() =>
                     {
+                        HideLoading();
                         if (error == null)
                         {
                             SetParseStatus($"✅ .warudo created!\nSaved to: {outputPath}");
@@ -1241,6 +1240,11 @@ namespace VirtualDresser.UI
                             Debug.LogError($"[DresserUI] 빌드 실패: {error}");
                         }
                     });
+                },
+                onProgress: (step, progress) =>
+                {
+                    UnityMainThreadDispatcher.Enqueue(() =>
+                        ShowLoading("Building .warudo", step, progress));
                 });
         }
 
@@ -1358,6 +1362,7 @@ namespace VirtualDresser.UI
 
             var smrs = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             int applied = 0;
+            var assignedSmrs = new HashSet<SkinnedMeshRenderer>();
 
             foreach (var smrData in parseResult.PrefabSmrDataList)
             {
@@ -1406,11 +1411,19 @@ namespace VirtualDresser.UI
                 if (target == null && isSparse)
                 {
                     int maxIdx = smrData.SparseWeights.Keys.Max();
-                    // 해당 인덱스 이상의 블렌드쉐이프를 가진 SMR — 여러 개면 가장 많은 것
+                    // 미할당 SMR 중 인덱스 수용 가능한 것, blendShapeCount가 가장 작은 것 우선 (오버매칭 방지)
                     target = smrs
-                        .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > maxIdx)
-                        .OrderByDescending(s => s.sharedMesh.blendShapeCount)
+                        .Where(s => s.sharedMesh != null
+                                 && s.sharedMesh.blendShapeCount > maxIdx
+                                 && !assignedSmrs.Contains(s))
+                        .OrderBy(s => s.sharedMesh.blendShapeCount)
                         .FirstOrDefault();
+                    // 미할당 없으면 이미 할당된 것도 허용 (중복 SMR에 여러 sparse set 적용)
+                    if (target == null)
+                        target = smrs
+                            .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > maxIdx)
+                            .OrderBy(s => s.sharedMesh.blendShapeCount)
+                            .FirstOrDefault();
                 }
 
                 // ── 4: 개수 fallback (dense 전용) ──
@@ -1472,6 +1485,7 @@ namespace VirtualDresser.UI
                         }).ToArray();
                 }
 
+                assignedSmrs.Add(target);
                 applied++;
                 Debug.Log($"[DresserUI] Prefab 블렌드쉐이프 적용: {target.name} ← GoName='{smrData.GoName}' " +
                           $"isSparse={isSparse} 항목={debugEntries.Length}개: {string.Join(", ", debugEntries)}" +
@@ -1562,47 +1576,32 @@ namespace VirtualDresser.UI
         /// </summary>
         private void CreateInspectorPanel()
         {
-            // viewer-area (왼쪽 뷰포트) 에 absolute 오버레이로 추가
-            // → control-panel flex 레이아웃과 충돌 없이 항상 표시됨
-            var viewerArea = _root.Q<VisualElement>("viewer-area");
-            if (viewerArea == null)
-            {
-                // fallback: control-panel에 추가
-                var controlPanel = _root.Q<VisualElement>("control-panel");
-                if (controlPanel == null) return;
-                _inspectorPanel = new VisualElement();
-                controlPanel.Add(_inspectorPanel);
-            }
-            else
-            {
-                _inspectorPanel = new VisualElement();
-                viewerArea.Add(_inspectorPanel);
-            }
+            // control-panel 내 main-tabs 바로 앞에 삽입
+            // flexShrink=0 + maxHeight 로 main-tabs와 공간 분리
+            var controlPanel = _root.Q<VisualElement>("control-panel");
+            if (controlPanel == null) return;
 
+            _inspectorPanel = new VisualElement();
             _inspectorPanel.name = "mesh-inspector";
-            _inspectorPanel.style.display   = DisplayStyle.None;
-            _inspectorPanel.style.position  = Position.Absolute;
-            _inspectorPanel.style.left      = 14;
-            _inspectorPanel.style.bottom    = 80;   // 뷰포트 버튼 위
-            _inspectorPanel.style.width     = 280;
-            _inspectorPanel.style.maxHeight = 340;
+            _inspectorPanel.style.display    = DisplayStyle.None;
+            _inspectorPanel.style.flexShrink = 0;
+            _inspectorPanel.style.maxHeight  = 340;
+            _inspectorPanel.style.overflow   = Overflow.Hidden;
+            _inspectorPanel.style.borderTopWidth = 1;
+            _inspectorPanel.style.borderBottomWidth = 1;
+            _inspectorPanel.style.borderLeftWidth = 0;
+            _inspectorPanel.style.borderRightWidth = 0;
+            _inspectorPanel.style.borderTopColor   = new Color(0.086f, 0.467f, 1f, 0.2f);
+            _inspectorPanel.style.borderBottomColor = new Color(0.086f, 0.467f, 1f, 0.15f);
+            _inspectorPanel.style.paddingTop    = 8;
+            _inspectorPanel.style.paddingBottom = 6;
+            _inspectorPanel.style.marginBottom  = 4;
 
-            // 반투명 다크 패널
-            _inspectorPanel.style.backgroundColor    = new Color(0.04f, 0.08f, 0.16f, 0.92f);
-            _inspectorPanel.style.borderTopLeftRadius     = 8;
-            _inspectorPanel.style.borderTopRightRadius    = 8;
-            _inspectorPanel.style.borderBottomLeftRadius  = 8;
-            _inspectorPanel.style.borderBottomRightRadius = 8;
-            _inspectorPanel.style.borderTopWidth = _inspectorPanel.style.borderBottomWidth =
-            _inspectorPanel.style.borderLeftWidth = _inspectorPanel.style.borderRightWidth = 1;
-            _inspectorPanel.style.borderTopColor = _inspectorPanel.style.borderBottomColor =
-            _inspectorPanel.style.borderLeftColor = _inspectorPanel.style.borderRightColor
-                = new Color(0.086f, 0.467f, 1f, 0.3f);
-            _inspectorPanel.style.paddingTop    = 10;
-            _inspectorPanel.style.paddingBottom = 10;
-            _inspectorPanel.style.paddingLeft   = 12;
-            _inspectorPanel.style.paddingRight  = 12;
-            _inspectorPanel.style.overflow      = Overflow.Hidden;
+            var mainTabs = _root.Q<VisualElement>("main-tabs");
+            if (mainTabs != null)
+                controlPanel.Insert(controlPanel.IndexOf(mainTabs), _inspectorPanel);
+            else
+                controlPanel.Add(_inspectorPanel);
         }
 
         /// <summary>
@@ -1649,197 +1648,259 @@ namespace VirtualDresser.UI
 
             _inspectorPanel.style.display = DisplayStyle.Flex;
 
-            // ── 헤더 행: 이름 + X 버튼 ──
+            // ── 헤더: 메쉬 이름 + Hide/Delete + X ──
             var header = new VisualElement();
             header.style.flexDirection = FlexDirection.Row;
             header.style.alignItems    = Align.Center;
             header.style.marginBottom  = 6;
 
-            var sectionLbl = new Label("SELECTED MESH");
-            sectionLbl.style.fontSize   = 9;
-            sectionLbl.style.color      = new Color(0.086f, 0.467f, 1f, 0.7f);
-            sectionLbl.style.flexGrow   = 1;
-            // Letter spacing 설정 (Unity 2021.3 스타일)
+            var meshIcon = new Label("◈");
+            meshIcon.style.fontSize    = 11;
+            meshIcon.style.color       = new Color(0.3f, 0.7f, 1f);
+            meshIcon.style.marginRight = 4;
+
+            var meshNameLbl = new Label(_selectedEntry.MeshName);
+            meshNameLbl.style.fontSize  = 11;
+            meshNameLbl.style.color     = Color.white;
+            meshNameLbl.style.flexGrow  = 1;
+            meshNameLbl.style.overflow  = Overflow.Hidden;
+            meshNameLbl.style.whiteSpace = WhiteSpace.NoWrap;
+
+            bool isVisible = _selectedEntry.IsVisible;
+            var visBtn = new Button(() =>
+            {
+                SetMeshVisible(_selectedEntry, !_selectedEntry.IsVisible);
+                RefreshInspectorPanel();
+            }) { text = isVisible ? "Hide" : "Show" };
+            visBtn.style.width    = 36;
+            visBtn.style.height   = 20;
+            visBtn.style.fontSize = 9;
+            visBtn.style.marginRight = 3;
+
+            var delBtn = new Button(() =>
+            {
+                DeleteMesh(_selectedEntry);
+                _meshSelector?.Deselect();
+            }) { text = "Del" };
+            delBtn.style.width           = 28;
+            delBtn.style.height          = 20;
+            delBtn.style.fontSize        = 9;
+            delBtn.style.backgroundColor = new StyleColor(new Color(0.45f, 0.12f, 0.12f));
+            delBtn.style.marginRight     = 4;
 
             var closeBtn = new Button(() =>
             {
                 _meshSelector?.Deselect();
                 SetSelectedEntry(null);
             }) { text = "✕" };
-            closeBtn.style.width           = 20;
-            closeBtn.style.height          = 20;
-            closeBtn.style.fontSize        = 11;
+            closeBtn.style.width  = 18;
+            closeBtn.style.height = 18;
+            closeBtn.style.fontSize = 10;
             closeBtn.style.backgroundColor = StyleKeyword.None;
-            closeBtn.style.color           = new Color(0.5f, 0.5f, 0.5f);
+            closeBtn.style.color = new Color(0.45f, 0.45f, 0.45f);
             closeBtn.style.borderTopWidth = closeBtn.style.borderBottomWidth =
             closeBtn.style.borderLeftWidth = closeBtn.style.borderRightWidth = 0;
 
-            header.Add(sectionLbl);
+            header.Add(meshIcon);
+            header.Add(meshNameLbl);
+            header.Add(visBtn);
+            header.Add(delBtn);
             header.Add(closeBtn);
             _inspectorPanel.Add(header);
 
-            // ── 메쉬 이름 ──
-            var nameRow = new VisualElement();
-            nameRow.style.flexDirection = FlexDirection.Row;
-            nameRow.style.alignItems    = Align.Center;
-            nameRow.style.marginBottom  = 8;
+            if (_selectedEntry.Renderer == null) return;
 
-            var meshIcon = new Label("◈");
-            meshIcon.style.fontSize   = 12;
-            meshIcon.style.color      = new Color(0.3f, 0.7f, 1f);
-            meshIcon.style.marginRight = 5;
+            // ── 서브 탭: Color / BlendShape ──
+            var subTabRow = new VisualElement();
+            subTabRow.style.flexDirection  = FlexDirection.Row;
+            subTabRow.style.marginBottom   = 6;
+            subTabRow.style.borderBottomWidth = 1;
+            subTabRow.style.borderBottomColor = new Color(1f, 1f, 1f, 0.07f);
 
-            var meshName = new Label(_selectedEntry.MeshName);
-            meshName.style.fontSize = 13;
-            meshName.style.color    = Color.white;
-            meshName.style.flexGrow = 1;
-            meshName.style.overflow = Overflow.Hidden;
-            meshName.style.whiteSpace = WhiteSpace.NoWrap;
+            var colorTabContent  = new VisualElement();
+            var bsTabContent     = new VisualElement();
 
-            nameRow.Add(meshIcon);
-            nameRow.Add(meshName);
-            _inspectorPanel.Add(nameRow);
+            // 서브 탭 전환 helper
+            bool[] subTabState = { true }; // [0]=Color탭 active
 
-            // ── 액션 버튼 행 ──
-            var actionRow = new VisualElement();
-            actionRow.style.flexDirection = FlexDirection.Row;
-            actionRow.style.marginBottom  = 10;
-
-            bool isVisible = _selectedEntry.IsVisible;
-            var visBtn = new Button(() =>
+            void SetSubTab(bool colorActive)
             {
-                SetMeshVisible(_selectedEntry, !_selectedEntry.IsVisible);
-                _meshSelector?.Select(_selectedEntry.Renderer); // 선택 유지
-            })
-            { text = isVisible ? "Hide" : "Show" };
-            visBtn.style.flexGrow         = 1;
-            visBtn.style.height           = 26;
-            visBtn.style.fontSize         = 11;
-            visBtn.style.marginRight      = 4;
-            visBtn.style.backgroundColor  = isVisible
-                ? new StyleColor(new Color(0.15f, 0.35f, 0.55f))
-                : new StyleColor(new Color(0.3f, 0.3f, 0.3f));
-
-            var delBtn = new Button(() =>
-            {
-                DeleteMesh(_selectedEntry);
-                _meshSelector?.Deselect();
-            }) { text = "Delete" };
-            delBtn.style.width           = 60;
-            delBtn.style.height          = 26;
-            delBtn.style.fontSize        = 11;
-            delBtn.style.backgroundColor = new StyleColor(new Color(0.45f, 0.12f, 0.12f));
-
-            actionRow.Add(visBtn);
-            actionRow.Add(delBtn);
-            _inspectorPanel.Add(actionRow);
-
-            // ── 머티리얼 색상 편집 섹션 ──
-            if (_selectedEntry.Renderer != null)
-            {
-                var matSectionLbl = new Label("MATERIALS");
-                matSectionLbl.style.fontSize  = 9;
-                matSectionLbl.style.color     = new Color(0.086f, 0.467f, 1f, 0.7f);
-                matSectionLbl.style.marginBottom = 5;
-                _inspectorPanel.Add(matSectionLbl);
-
-                // 머티리얼 목록 — ScrollView로 감싸서 많아도 스크롤 가능
-                var matScroll = new ScrollView(ScrollViewMode.Vertical);
-                matScroll.style.maxHeight = 200;
-                matScroll.style.flexShrink = 1;
-
-                var mats = _selectedEntry.Renderer.sharedMaterials;
-                for (int mi = 0; mi < mats.Length; mi++)
-                {
-                    var mat = mats[mi];
-                    if (mat == null) continue;
-                    matScroll.Add(BuildMaterialColorRow(mat, _selectedEntry.Renderer, mi));
-                }
-                _inspectorPanel.Add(matScroll);
+                subTabState[0] = colorActive;
+                colorTabContent.style.display = colorActive ? DisplayStyle.Flex : DisplayStyle.None;
+                bsTabContent.style.display    = colorActive ? DisplayStyle.None : DisplayStyle.Flex;
             }
+
+            var colorTabBtn = new Button(() => SetSubTab(true))  { text = "Color" };
+            var bsTabBtn    = new Button(() => SetSubTab(false)) { text = "BlendShape" };
+
+            // 탭 버튼 공통 스타일 설정
+            foreach (var tabBtn in new Button[] { colorTabBtn, bsTabBtn })
+            {
+                bool isColor = (tabBtn == colorTabBtn);
+                tabBtn.style.flexGrow   = 1;
+                tabBtn.style.height     = 20;
+                tabBtn.style.fontSize   = 9;
+                tabBtn.style.borderTopWidth    = 0;
+                tabBtn.style.borderBottomWidth = 0;
+                tabBtn.style.borderLeftWidth   = 0;
+                tabBtn.style.borderRightWidth  = 0;
+                tabBtn.style.backgroundColor   = isColor
+                    ? new StyleColor(new Color(0.086f, 0.467f, 1f, 0.25f))
+                    : StyleKeyword.None;
+                tabBtn.style.color = isColor
+                    ? new StyleColor(Color.white)
+                    : new StyleColor(new Color(0.6f, 0.6f, 0.6f));
+                subTabRow.Add(tabBtn);
+            }
+            // 탭 버튼 active 스타일 동적 갱신
+            colorTabBtn.clicked += () =>
+            {
+                colorTabBtn.style.backgroundColor = new StyleColor(new Color(0.086f, 0.467f, 1f, 0.25f));
+                colorTabBtn.style.color = Color.white;
+                bsTabBtn.style.backgroundColor = StyleKeyword.None;
+                bsTabBtn.style.color = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
+            };
+            bsTabBtn.clicked += () =>
+            {
+                bsTabBtn.style.backgroundColor = new StyleColor(new Color(0.086f, 0.467f, 1f, 0.25f));
+                bsTabBtn.style.color = Color.white;
+                colorTabBtn.style.backgroundColor = StyleKeyword.None;
+                colorTabBtn.style.color = new StyleColor(new Color(0.6f, 0.6f, 0.6f));
+            };
+
+            _inspectorPanel.Add(subTabRow);
+
+            // ── Color 탭 콘텐츠 ──
+            var mats = _selectedEntry.Renderer.sharedMaterials;
+            var matScroll = new ScrollView(ScrollViewMode.Vertical);
+            matScroll.style.maxHeight  = 240;
+            matScroll.style.flexShrink = 1;
+            for (int mi = 0; mi < mats.Length; mi++)
+            {
+                var mat = mats[mi];
+                if (mat == null) continue;
+                matScroll.Add(BuildMaterialColorRow(mat));
+            }
+            colorTabContent.Add(matScroll);
+            _inspectorPanel.Add(colorTabContent);
+
+            // ── BlendShape 탭 콘텐츠 ──
+            bsTabContent.style.display = DisplayStyle.None;
+            _inspectorPanel.Add(bsTabContent);
+            BuildBlendShapePanel(_selectedEntry.Renderer, bsTabContent);
         }
 
-        /// <summary>
-        /// 머티리얼 1개에 대한 색상 편집 행.
-        /// mat 이름 + 컬러 스와치 + RGB 슬라이더 + 헥스 입력
-        /// </summary>
-        // ─── 색상 팔레트 프리셋 ───
-        // 아바타 커스터마이징에서 자주 쓰는 색상 세트 (5행 × 6열 = 30색)
-        private static readonly Color[] ColorPalette =
+        private void BuildBlendShapePanel(SkinnedMeshRenderer smr, VisualElement container)
         {
-            // ── Row 1: 흰색 ~ 회색 ~ 검정 ──
-            Color.white,
-            new Color(0.85f, 0.85f, 0.85f),
-            new Color(0.65f, 0.65f, 0.65f),
-            new Color(0.40f, 0.40f, 0.40f),
-            new Color(0.20f, 0.20f, 0.20f),
-            Color.black,
+            var mesh = smr.sharedMesh;
+            if (mesh == null || mesh.blendShapeCount == 0)
+            {
+                var none = new Label("No blendshapes");
+                none.style.fontSize = 10;
+                none.style.color    = new Color(0.45f, 0.45f, 0.45f);
+                none.style.marginTop = 6;
+                container.Add(none);
+                return;
+            }
 
-            // ── Row 2: 피부 톤 ──
-            new Color(1.00f, 0.93f, 0.86f),   // 밝은 피부
-            new Color(0.98f, 0.83f, 0.70f),   // 아이보리
-            new Color(0.95f, 0.75f, 0.60f),   // 피치
-            new Color(0.87f, 0.65f, 0.47f),   // 탄
-            new Color(0.75f, 0.52f, 0.35f),   // 브라운
-            new Color(0.55f, 0.35f, 0.20f),   // 다크 브라운
+            // 검색 필터
+            var searchField = new TextField { value = "" };
+            searchField.style.marginBottom = 4;
+            searchField.style.height       = 20;
+            searchField.style.fontSize     = 10;
+            container.Add(searchField);
 
-            // ── Row 3: 헤어 컬러 ──
-            new Color(0.97f, 0.95f, 0.87f),   // 플래티넘
-            new Color(0.95f, 0.85f, 0.50f),   // 금발
-            new Color(0.70f, 0.40f, 0.15f),   // 갈색
-            new Color(0.20f, 0.10f, 0.05f),   // 검정갈색
-            new Color(0.60f, 0.15f, 0.25f),   // 버건디
-            new Color(0.85f, 0.45f, 0.55f),   // 핑크
+            var scroll = new ScrollView(ScrollViewMode.Vertical);
+            scroll.style.maxHeight  = 220;
+            scroll.style.flexShrink = 1;
+            container.Add(scroll);
 
-            // ── Row 4: 의상 포인트 컬러 ──
-            new Color(0.90f, 0.30f, 0.30f),   // 레드
-            new Color(0.95f, 0.60f, 0.20f),   // 오렌지
-            new Color(0.95f, 0.90f, 0.25f),   // 옐로우
-            new Color(0.25f, 0.78f, 0.40f),   // 그린
-            new Color(0.15f, 0.55f, 0.95f),   // 블루
-            new Color(0.60f, 0.25f, 0.90f),   // 퍼플
+            void RebuildBsList(string filter)
+            {
+                scroll.Clear();
+                for (int i = 0; i < mesh.blendShapeCount; i++)
+                {
+                    string bsName = mesh.GetBlendShapeName(i);
+                    if (!string.IsNullOrEmpty(filter) &&
+                        bsName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
 
-            // ── Row 5: 파스텔 ──
-            new Color(1.00f, 0.75f, 0.80f),   // 베이비 핑크
-            new Color(0.80f, 0.90f, 1.00f),   // 스카이 블루
-            new Color(0.80f, 1.00f, 0.85f),   // 민트
-            new Color(1.00f, 0.95f, 0.75f),   // 버터
-            new Color(0.90f, 0.80f, 1.00f),   // 라벤더
-            new Color(0.70f, 0.95f, 0.95f),   // 아쿠아
-        };
+                    int captured = i;
+                    var row = new VisualElement();
+                    row.style.flexDirection = FlexDirection.Row;
+                    row.style.alignItems    = Align.Center;
+                    row.style.marginBottom  = 2;
 
-        private VisualElement BuildMaterialColorRow(Material mat, SkinnedMeshRenderer smr, int matIndex)
+                    var lbl = new Label(bsName.Length > 18 ? bsName.Substring(0, 18) + "…" : bsName);
+                    lbl.style.width    = 90;
+                    lbl.style.fontSize = 9;
+                    lbl.style.color    = new Color(0.75f, 0.75f, 0.75f);
+                    lbl.style.overflow = Overflow.Hidden;
+                    lbl.style.whiteSpace = WhiteSpace.NoWrap;
+
+                    float currentWeight = smr.GetBlendShapeWeight(captured);
+                    var slider = new Slider(0f, 100f) { value = currentWeight };
+                    slider.style.flexGrow    = 1;
+                    slider.style.marginLeft  = 4;
+                    slider.style.marginRight = 3;
+
+                    var valLbl = new Label(Mathf.RoundToInt(currentWeight).ToString());
+                    valLbl.style.width    = 24;
+                    valLbl.style.fontSize = 9;
+                    valLbl.style.color    = new Color(0.6f, 0.6f, 0.6f);
+                    valLbl.style.unityTextAlign = TextAnchor.MiddleRight;
+
+                    slider.RegisterValueChangedCallback(e =>
+                    {
+                        smr.SetBlendShapeWeight(captured, e.newValue);
+                        valLbl.text = Mathf.RoundToInt(e.newValue).ToString();
+                    });
+
+                    row.Add(lbl);
+                    row.Add(slider);
+                    row.Add(valLbl);
+                    scroll.Add(row);
+                }
+            }
+
+            RebuildBsList("");
+            searchField.RegisterValueChangedCallback(e => RebuildBsList(e.newValue));
+        }
+
+        private VisualElement BuildMaterialColorRow(Material mat)
         {
             var container = new VisualElement();
-            container.style.marginBottom    = 8;
-            container.style.backgroundColor = new Color(0.08f, 0.10f, 0.14f);
-            container.style.borderTopLeftRadius     = 5;
-            container.style.borderTopRightRadius    = 5;
-            container.style.borderBottomLeftRadius  = 5;
-            container.style.borderBottomRightRadius = 5;
-            container.style.paddingTop    = 6;
-            container.style.paddingBottom = 6;
-            container.style.paddingLeft   = 8;
-            container.style.paddingRight  = 8;
+            container.style.marginBottom    = 6;
+            container.style.backgroundColor = new Color(0.07f, 0.09f, 0.13f);
+            container.style.borderTopLeftRadius     = 4;
+            container.style.borderTopRightRadius    = 4;
+            container.style.borderBottomLeftRadius  = 4;
+            container.style.borderBottomRightRadius = 4;
+            container.style.paddingTop    = 5;
+            container.style.paddingBottom = 5;
+            container.style.paddingLeft   = 7;
+            container.style.paddingRight  = 7;
 
             Color currentColor = GetMatColor(mat);
-            float[] values     = { currentColor.r, currentColor.g, currentColor.b, currentColor.a };
+            Color.RGBToHSV(currentColor, out float h, out float s, out float v);
+            float a = currentColor.a;
 
-            // ── 1행: 이름 + 현재 컬러 스와치 + 리셋 ──
+            // ── 헤더: 이름 + 스와치 + 리셋 ──
             var headerRow = new VisualElement();
             headerRow.style.flexDirection = FlexDirection.Row;
             headerRow.style.alignItems    = Align.Center;
-            headerRow.style.marginBottom  = 6;
+            headerRow.style.marginBottom  = 5;
 
-            var matLabel = new Label(mat.name.Length > 20 ? mat.name[..20] + "…" : mat.name);
-            matLabel.style.fontSize = 10;
-            matLabel.style.color    = new Color(0.65f, 0.65f, 0.65f);
+            var matLabel = new Label(mat.name.Length > 22 ? mat.name.Substring(0, 22) + "…" : mat.name);
+            matLabel.style.fontSize = 9;
+            matLabel.style.color    = new Color(0.60f, 0.60f, 0.60f);
             matLabel.style.flexGrow = 1;
+            matLabel.style.overflow  = Overflow.Hidden;
+            matLabel.style.whiteSpace = WhiteSpace.NoWrap;
 
-            // 현재 색상 스와치 (크게, 클릭 불필요)
             var swatch = new VisualElement();
-            swatch.style.width  = 28;
-            swatch.style.height = 18;
+            swatch.style.width  = 26;
+            swatch.style.height = 16;
             swatch.style.backgroundColor = currentColor;
             swatch.style.borderTopLeftRadius     = 3;
             swatch.style.borderTopRightRadius    = 3;
@@ -1848,20 +1909,19 @@ namespace VirtualDresser.UI
             swatch.style.borderTopWidth = swatch.style.borderBottomWidth =
             swatch.style.borderLeftWidth = swatch.style.borderRightWidth = 1;
             swatch.style.borderTopColor = swatch.style.borderBottomColor =
-            swatch.style.borderLeftColor = swatch.style.borderRightColor = new Color(1,1,1,0.15f);
-            swatch.style.marginLeft  = 5;
-            swatch.style.marginRight = 5;
+            swatch.style.borderLeftColor = swatch.style.borderRightColor = new Color(1,1,1,0.12f);
+            swatch.style.marginLeft  = 4;
+            swatch.style.marginRight = 4;
 
             var resetBtn = new Button(() =>
             {
-                values[0] = values[1] = values[2] = values[3] = 1f;
+                h = 0f; s = 0f; v = 1f; a = 1f;
                 swatch.style.backgroundColor = Color.white;
                 ApplyMatColor(mat, Color.white);
-                // 슬라이더 상태 동기화는 UpdateSliders 델리게이트로
             }) { text = "↺" };
-            resetBtn.style.width    = 22;
-            resetBtn.style.height   = 18;
-            resetBtn.style.fontSize = 12;
+            resetBtn.style.width    = 20;
+            resetBtn.style.height   = 16;
+            resetBtn.style.fontSize = 11;
             resetBtn.style.backgroundColor = StyleKeyword.None;
             resetBtn.style.color    = new Color(0.5f, 0.5f, 0.5f);
             resetBtn.style.borderTopWidth = resetBtn.style.borderBottomWidth =
@@ -1872,205 +1932,130 @@ namespace VirtualDresser.UI
             headerRow.Add(resetBtn);
             container.Add(headerRow);
 
-            // ── 2행: 컬러 팔레트 그리드 (5×6) ──
-            var paletteGrid = new VisualElement();
-            paletteGrid.style.flexDirection = FlexDirection.Row;
-            paletteGrid.style.flexWrap      = Wrap.Wrap;
-            paletteGrid.style.marginBottom  = 6;
-
-            Action syncSliders = null; // 슬라이더 동기화 델리게이트 (슬라이더 생성 후 연결)
-
-            foreach (var presetColor in ColorPalette)
+            // ── HSV + Alpha 슬라이더 ──
+            // H: 색상(0-360°)  S: 채도(0-100%)  V: 밝기(0-100%)  A: 불투명도(0-100%)
+            string[] chNames  = { "H",   "S",   "V",   "A"   };
+            float[]  chMaxs   = { 360f,  100f,  100f,  100f  };
+            float[]  chInits  = { h * 360f, s * 100f, v * 100f, a * 100f };
+            Color[]  chColors =
             {
-                var captured = presetColor;
-                var cell = new VisualElement();
-                cell.style.width  = 24;
-                cell.style.height = 14;
-                cell.style.marginTop = cell.style.marginBottom =
-                cell.style.marginLeft = cell.style.marginRight = 1.5f;
-                cell.style.backgroundColor = presetColor;
-                cell.style.borderTopLeftRadius     = 2;
-                cell.style.borderTopRightRadius    = 2;
-                cell.style.borderBottomLeftRadius  = 2;
-                cell.style.borderBottomRightRadius = 2;
-
-                cell.RegisterCallback<MouseEnterEvent>(_ =>
-                {
-                    cell.style.borderTopWidth = cell.style.borderBottomWidth =
-                    cell.style.borderLeftWidth = cell.style.borderRightWidth = 1.5f;
-                    cell.style.borderTopColor = cell.style.borderBottomColor =
-                    cell.style.borderLeftColor = cell.style.borderRightColor = Color.white;
-                });
-                cell.RegisterCallback<MouseLeaveEvent>(_ =>
-                {
-                    cell.style.borderTopWidth = cell.style.borderBottomWidth =
-                    cell.style.borderLeftWidth = cell.style.borderRightWidth = 0;
-                });
-                cell.RegisterCallback<ClickEvent>(_ =>
-                {
-                    values[0] = captured.r;
-                    values[1] = captured.g;
-                    values[2] = captured.b;
-                    // alpha 유지
-                    var newColor = new Color(values[0], values[1], values[2], values[3]);
-                    ApplyMatColor(mat, newColor);
-                    swatch.style.backgroundColor = newColor;
-                    syncSliders?.Invoke();
-                });
-
-                paletteGrid.Add(cell);
-            }
-            container.Add(paletteGrid);
-
-            // ── 3행: 커스텀 조절 (접기/펼치기) ──
-            bool customOpen = false;
-
-            var customToggleRow = new VisualElement();
-            customToggleRow.style.flexDirection = FlexDirection.Row;
-            customToggleRow.style.alignItems    = Align.Center;
-            customToggleRow.style.marginBottom  = 2;
-
-            var toggleLbl = new Label("▶ Custom");
-            toggleLbl.style.fontSize = 9;
-            toggleLbl.style.color    = new Color(0.45f, 0.45f, 0.45f);
-            customToggleRow.Add(toggleLbl);
-
-            var customPanel = BuildColorSliders(mat, values, swatch, out syncSliders);
-            customPanel.style.display = DisplayStyle.None;
-
-            customToggleRow.RegisterCallback<ClickEvent>(_ =>
-            {
-                customOpen = !customOpen;
-                customPanel.style.display = customOpen ? DisplayStyle.Flex : DisplayStyle.None;
-                toggleLbl.text = customOpen ? "▼ Custom" : "▶ Custom";
-            });
-
-            container.Add(customToggleRow);
-            container.Add(customPanel);
-
-            // Reset 버튼이 슬라이더도 동기화하도록 연결
-            resetBtn.clicked += () => syncSliders?.Invoke();
-
-            return container;
-        }
-
-        /// <summary>
-        /// RGB + Alpha 슬라이더 + 헥스 입력 패널.
-        /// out syncSliders: 외부에서 슬라이더를 values 배열 기준으로 재동기화하는 Action.
-        /// </summary>
-        private VisualElement BuildColorSliders(
-            Material mat, float[] values, VisualElement swatch, out Action syncSliders)
-        {
-            var panel = new VisualElement();
-            panel.style.paddingTop = 4;
-
-            var channels = new[]
-            {
-                ("R", new Color(0.85f, 0.3f,  0.3f)),
-                ("G", new Color(0.3f,  0.75f, 0.3f)),
-                ("B", new Color(0.35f, 0.55f, 0.9f)),
-                ("A", new Color(0.65f, 0.65f, 0.65f)),
+                new Color(0.8f, 0.5f, 0.2f),
+                new Color(0.3f, 0.7f, 0.5f),
+                new Color(0.7f, 0.7f, 0.7f),
+                new Color(0.5f, 0.5f, 0.65f),
             };
 
-            var sliders  = new Slider[4];
-            var valLbls  = new Label[4];
+            var sliders = new Slider[4];
+            var valLbls = new Label[4];
             TextField hexField = null;
 
-            for (int ch = 0; ch < 4; ch++)
+            Action updateFromSliders = null;
+            updateFromSliders = () =>
             {
-                int idx = ch;
-                var (chName, chColor) = channels[ch];
+                var c = Color.HSVToRGB(h, s, v);
+                c.a = a;
+                ApplyMatColor(mat, c);
+                swatch.style.backgroundColor = c;
+                if (hexField != null) hexField.SetValueWithoutNotify(ColorToHex(c));
+            };
+
+            for (int ci = 0; ci < 4; ci++)
+            {
+                int idx    = ci;
+                float cMax = chMaxs[ci];
+                string suffix = idx == 0 ? "\u00b0" : "%";  // ° or %
 
                 var row = new VisualElement();
                 row.style.flexDirection = FlexDirection.Row;
                 row.style.alignItems    = Align.Center;
-                row.style.marginBottom  = 3;
+                row.style.marginBottom  = 2;
 
-                var lbl = new Label(chName);
+                var lbl = new Label(chNames[idx]);
                 lbl.style.width    = 12;
                 lbl.style.fontSize = 9;
-                lbl.style.color    = new StyleColor(chColor);
+                lbl.style.color    = new StyleColor(chColors[idx]);
 
-                var slider = new Slider(0f, 1f) { value = values[idx] };
+                var slider = new Slider(0f, cMax) { value = chInits[idx] };
                 slider.style.flexGrow    = 1;
                 slider.style.marginLeft  = 4;
                 slider.style.marginRight = 3;
                 sliders[idx] = slider;
 
-                var valLbl = new Label(Mathf.RoundToInt(values[idx] * 255).ToString());
-                valLbl.style.width          = 26;
-                valLbl.style.fontSize       = 9;
-                valLbl.style.color          = new Color(0.65f, 0.65f, 0.65f);
+                var valLbl = new Label(Mathf.RoundToInt(chInits[idx]) + suffix);
+                valLbl.style.width    = 30;
+                valLbl.style.fontSize = 9;
+                valLbl.style.color    = new Color(0.6f, 0.6f, 0.6f);
                 valLbl.style.unityTextAlign = TextAnchor.MiddleRight;
                 valLbls[idx] = valLbl;
 
                 slider.RegisterValueChangedCallback(e =>
                 {
-                    values[idx] = e.newValue;
-                    valLbl.text = Mathf.RoundToInt(e.newValue * 255).ToString();
-                    var newColor = new Color(values[0], values[1], values[2], values[3]);
-                    ApplyMatColor(mat, newColor);
-                    swatch.style.backgroundColor = newColor;
-                    hexField?.SetValueWithoutNotify(ColorToHex(newColor));
+                    float norm = e.newValue / cMax;
+                    if (idx == 0) h = norm;
+                    else if (idx == 1) s = norm;
+                    else if (idx == 2) v = norm;
+                    else              a = norm;
+                    valLbl.text = Mathf.RoundToInt(e.newValue) + suffix;
+                    updateFromSliders?.Invoke();
                 });
 
                 row.Add(lbl);
                 row.Add(slider);
                 row.Add(valLbl);
-                panel.Add(row);
+                container.Add(row);
             }
 
-            // ── 헥스 입력 ──
+            // ── Hex 입력 ──
             var hexRow = new VisualElement();
             hexRow.style.flexDirection = FlexDirection.Row;
             hexRow.style.alignItems    = Align.Center;
-            hexRow.style.marginTop     = 2;
+            hexRow.style.marginTop     = 3;
 
             var hashLbl = new Label("#");
             hashLbl.style.fontSize   = 9;
-            hashLbl.style.color      = new Color(0.45f, 0.45f, 0.45f);
+            hashLbl.style.color      = new Color(0.4f, 0.4f, 0.4f);
             hashLbl.style.marginRight = 2;
 
-            hexField = new TextField
-            {
-                value = ColorToHex(new Color(values[0], values[1], values[2]))
-            };
+            hexField = new TextField { value = ColorToHex(currentColor) };
             hexField.style.flexGrow  = 1;
             hexField.style.fontSize  = 9;
             hexField.style.height    = 18;
 
             hexField.RegisterValueChangedCallback(e =>
             {
-                if (TryParseHex(e.newValue, out Color parsed))
-                {
-                    values[0] = parsed.r; values[1] = parsed.g; values[2] = parsed.b;
-                    for (int i = 0; i < 3; i++)
-                    {
-                        sliders[i].SetValueWithoutNotify(values[i]);
-                        valLbls[i].text = Mathf.RoundToInt(values[i] * 255).ToString();
-                    }
-                    var newColor = new Color(values[0], values[1], values[2], values[3]);
-                    ApplyMatColor(mat, newColor);
-                    swatch.style.backgroundColor = newColor;
-                }
+                if (!TryParseHex(e.newValue, out Color parsed)) return;
+                Color.RGBToHSV(parsed, out h, out s, out v);
+                a = parsed.a;
+                // 슬라이더 위치 동기화
+                sliders[0].SetValueWithoutNotify(h * 360f);
+                sliders[1].SetValueWithoutNotify(s * 100f);
+                sliders[2].SetValueWithoutNotify(v * 100f);
+                sliders[3].SetValueWithoutNotify(a * 100f);
+                valLbls[0].text = Mathf.RoundToInt(h * 360f) + "°";
+                valLbls[1].text = Mathf.RoundToInt(s * 100f) + "%";
+                valLbls[2].text = Mathf.RoundToInt(v * 100f) + "%";
+                valLbls[3].text = Mathf.RoundToInt(a * 100f) + "%";
+                ApplyMatColor(mat, parsed);
+                swatch.style.backgroundColor = parsed;
             });
+
+            // Reset도 슬라이더 동기화
+            resetBtn.clicked += () =>
+            {
+                sliders[0].SetValueWithoutNotify(0f);
+                sliders[1].SetValueWithoutNotify(0f);
+                sliders[2].SetValueWithoutNotify(100f);
+                sliders[3].SetValueWithoutNotify(100f);
+                valLbls[0].text = "0°"; valLbls[1].text = "0%";
+                valLbls[2].text = "100%"; valLbls[3].text = "100%";
+                hexField.SetValueWithoutNotify("FFFFFF");
+            };
 
             hexRow.Add(hashLbl);
             hexRow.Add(hexField);
-            panel.Add(hexRow);
+            container.Add(hexRow);
 
-            // out 델리게이트: 팔레트/리셋 클릭 후 슬라이더 UI 동기화용
-            syncSliders = () =>
-            {
-                for (int i = 0; i < 4; i++)
-                {
-                    sliders[i].SetValueWithoutNotify(values[i]);
-                    valLbls[i].text = Mathf.RoundToInt(values[i] * 255).ToString();
-                }
-                hexField.SetValueWithoutNotify(ColorToHex(new Color(values[0], values[1], values[2])));
-            };
-
-            return panel;
+            return container;
         }
 
         // ─── 머티리얼 색상 유틸 ───
@@ -2385,11 +2370,30 @@ namespace VirtualDresser.UI
         /// 헤들리스 Unity 2021.3으로 .warudo 파일 빌드.
         /// onComplete: (outputPath, errorMsg) — 성공 시 errorMsg=null
         /// </summary>
+        // 로그 키워드 → (단계 설명, 진행률) 매핑
+        // 헤들리스 Unity 로그에서 이 키워드가 나타나면 해당 단계로 업데이트
+        private static readonly (string keyword, string step, float progress)[] s_StageMap =
+        {
+            ("[WarudoBuild] 시작",                    "Initializing...",            0.05f),
+            ("입력 해시 일치",                          "Using cached import...",     0.20f),
+            ("CopyFiles",                             "Copying assets...",          0.10f),
+            ("텍스처 임포트 최속화",                      "Optimizing textures...",     0.28f),
+            ("아바타 FBX 설정",                         "Configuring FBX...",         0.40f),
+            ("AssignTextures:",                       "Assigning textures...",      0.52f),
+            ("텍스처 할당 완료",                          "Textures assigned",          0.63f),
+            ("누락 본",                               "Binding bones...",           0.68f),
+            ("[WarudoBuild] Prefab 저장",              "Saving prefab...",           0.78f),
+            ("UMod 빌드 시작",                         "Building .warudo...",        0.85f),
+            ("AssetBundle 폴백",                      "Building bundle...",         0.85f),
+            ("[WarudoBuild] 완료",                    "Finishing up...",            0.96f),
+        };
+
         public static void BuildWarudo(
             string inputPath,
             string outputPath,
             string avatarName,
-            Action<string, string> onComplete)
+            Action<string, string> onComplete,
+            Action<string, float> onProgress = null)   // (step 설명, 0~1)
         {
             var unityExe = FindUnity2021();
             if (string.IsNullOrEmpty(unityExe))
@@ -2408,14 +2412,17 @@ namespace VirtualDresser.UI
             }
 
             var logPath = Path.Combine(Path.GetTempPath(), "vd-warudo-build.log");
-            var args    = $"-batchmode -nographics " +
-                          $"-projectPath \"{ConverterProjectPath}\" " +
-                          $"-executeMethod WarudoConverter.WarudoBuildScript.Build " +
-                          $"-inputPath \"{inputPath}\" " +
-                          $"-outputPath \"{outputPath}\" " +
-                          $"-avatarName \"{avatarName}\" " +
-                          $"-logFile \"{logPath}\" " +
-                          $"-quit";
+            // 이전 로그 삭제 (폴링 시 이전 내용 오인 방지)
+            try { if (File.Exists(logPath)) File.Delete(logPath); } catch { }
+
+            var args = $"-batchmode -nographics " +
+                       $"-projectPath \"{ConverterProjectPath}\" " +
+                       $"-executeMethod WarudoConverter.WarudoBuildScript.Build " +
+                       $"-inputPath \"{inputPath}\" " +
+                       $"-outputPath \"{outputPath}\" " +
+                       $"-avatarName \"{avatarName}\" " +
+                       $"-logFile \"{logPath}\" " +
+                       $"-quit";
 
             Debug.Log($"[WarudoBuilder] 헤들리스 실행: {unityExe}");
             Debug.Log($"[WarudoBuilder] 인수: {args}");
@@ -2432,15 +2439,69 @@ namespace VirtualDresser.UI
                 EnableRaisingEvents = true,
             };
 
+            // ── 로그 폴링 스레드 ──
+            // 500ms마다 로그 파일을 읽어 알려진 키워드로 진행률 추정
+            var pollCancel = new System.Threading.CancellationTokenSource();
+            if (onProgress != null)
+            {
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    long lastPos = 0;
+                    float lastProg = 0.03f;
+                    while (!pollCancel.Token.IsCancellationRequested)
+                    {
+                        await System.Threading.Tasks.Task.Delay(500, pollCancel.Token)
+                              .ContinueWith(_ => { });   // 취소 예외 무시
+
+                        if (!File.Exists(logPath)) continue;
+
+                        string newText;
+                        try
+                        {
+                            using var fs = new FileStream(logPath, FileMode.Open,
+                                FileAccess.Read, FileShare.ReadWrite);
+                            fs.Seek(lastPos, SeekOrigin.Begin);
+                            using var sr = new StreamReader(fs);
+                            newText = sr.ReadToEnd();
+                            lastPos = fs.Position;
+                        }
+                        catch { continue; }
+
+                        if (string.IsNullOrEmpty(newText)) continue;
+
+                        foreach (var (kw, step, prog) in s_StageMap)
+                        {
+                            if (prog > lastProg && newText.Contains(kw))
+                            {
+                                lastProg = prog;
+                                onProgress(step, prog);
+                            }
+                        }
+                    }
+                }, pollCancel.Token);
+            }
+
             proc.Exited += (_, __) =>
             {
+                pollCancel.Cancel();
+
                 if (proc.ExitCode == 0 && File.Exists(outputPath))
+                {
+                    onProgress?.Invoke("Done!", 1.0f);
                     onComplete?.Invoke(outputPath, null);
+                }
                 else
                 {
-                    var log = File.Exists(logPath)
-                        ? File.ReadAllText(logPath)[^Mathf.Min(500, File.ReadAllText(logPath).Length)..]
-                        : "no log";
+                    var log = "";
+                    try
+                    {
+                        if (File.Exists(logPath))
+                        {
+                            var all = File.ReadAllText(logPath);
+                            log = all.Length > 800 ? all[^800..] : all;
+                        }
+                    }
+                    catch { }
                     onComplete?.Invoke(null, $"Build failed (code {proc.ExitCode})\n{log}");
                 }
             };

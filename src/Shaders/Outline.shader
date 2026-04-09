@@ -3,7 +3,7 @@ Shader "VirtualDresser/Outline"
     Properties
     {
         _OutlineColor ("Outline Color", Color) = (0.15, 0.65, 1.0, 1.0)
-        _OutlineWidth ("Outline Width", Range(0.0, 0.08)) = 0.030
+        _OutlineWidth ("Outline Width", Range(0.0, 0.05)) = 0.007
     }
     SubShader
     {
