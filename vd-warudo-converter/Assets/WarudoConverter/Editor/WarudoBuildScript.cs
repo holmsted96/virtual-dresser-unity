@@ -55,49 +55,121 @@ namespace WarudoConverter
             ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var smrBindings);
             Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, SMR바인딩: {smrBindings.Count}개");
 
-            var importRoot = $"Assets/VDImport_{avatarName}";
-            if (AssetDatabase.IsValidFolder(importRoot))
-                AssetDatabase.DeleteAsset(importRoot);
-
-            // 1. 파일 복사 + 임포트
+            var importRoot  = $"Assets/VDImport_{avatarName}";
             var avatarDir   = $"{importRoot}/Avatar";
             var clothingDir = $"{importRoot}/Clothing";
             var hairDir     = $"{importRoot}/Hair";
 
-            CopyFiles(inputPath,                             avatarDir,   topOnly: true);
-            CopyFiles(Path.Combine(inputPath, "clothing"),   clothingDir, topOnly: false);
-            CopyFiles(Path.Combine(inputPath, "hair"),       hairDir,     topOnly: false);
+            if (AssetDatabase.IsValidFolder(importRoot))
+                AssetDatabase.DeleteAsset(importRoot);
+
+            // ── [1] 파일 복사: StartAssetEditing으로 묶어서 한 번만 임포트 ──
+            AssetDatabase.StartAssetEditing();
+            try
+            {
+                CopyFiles(inputPath,                           avatarDir,   topOnly: true);
+                CopyFiles(Path.Combine(inputPath, "clothing"), clothingDir, topOnly: false);
+                CopyFiles(Path.Combine(inputPath, "hair"),     hairDir,     topOnly: false);
+            }
+            finally { AssetDatabase.StopAssetEditing(); }
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-            // 2. 아바타 FBX 찾기
+            // ── [2] 아바타 FBX 찾기 ──
             var avatarFbxPath = FindLargestFbx(avatarDir);
             if (string.IsNullOrEmpty(avatarFbxPath))
                 throw new Exception("아바타 FBX 없음");
 
-            // 3. FBX 머티리얼 외부 추출 (텍스처 할당을 위해 필수)
-            //    External 모드로 설정하면 Materials/ 폴더에 .mat 파일 생성됨
-            ExtractMaterials(avatarFbxPath);
-            foreach (var p in FindAllFbx(clothingDir)) ExtractMaterials(p);
-            foreach (var p in FindAllFbx(hairDir))     ExtractMaterials(p);
+            // ── [3] 텍스처 임포트 설정 최속화 (압축 없음, 밉맵 없음) ──
+            //    .warudo 패키징용이므로 최고속 설정 사용
+            OptimizeTextureImportSettings(importRoot);
+
+            // ── [4] FBX 설정을 한 번에 묶어서 적용 (ExtractMaterials + HumanoidRig) ──
+            //    SaveAndReimport()를 FBX당 1회만 호출
+            AssetDatabase.StartAssetEditing();
+            try
+            {
+                ConfigureFbxImporters(avatarFbxPath, clothingDir, hairDir);
+            }
+            finally { AssetDatabase.StopAssetEditing(); }
+
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-            // 4. Humanoid 리그 설정 (아바타만)
-            SetupHumanoidRig(avatarFbxPath);
-
-            // 5. 텍스처 → 외부 머티리얼 할당 (manifest 매핑 우선 사용)
+            // ── [5] 텍스처 → 머티리얼 할당 ──
             AssignTexturesToMaterials(importRoot, matTexMap);
 
-            // 6. 결합 Prefab 생성
+            // ── [6] 결합 Prefab 생성 ──
             var prefabPath = BuildCombinedPrefab(
                 importRoot, avatarFbxPath, clothingDir, hairDir, avatarName, excludedMeshes, smrBindings);
 
-            // 7. .warudo 빌드
+            // ── [7] .warudo 빌드 ──
             BuildWarudoMod(prefabPath, outputPath, avatarName);
 
-            // 8. 정리
+            // ── [8] 정리 ──
             AssetDatabase.DeleteAsset(importRoot);
             AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// 텍스처 임포트 설정을 빌드용 최속으로 변경.
+        /// 압축 없음 + 밉맵 없음 → 임포트 시간 대폭 단축.
+        /// </summary>
+        private static void OptimizeTextureImportSettings(string importRoot)
+        {
+            AssetDatabase.StartAssetEditing();
+            try
+            {
+                foreach (var guid in AssetDatabase.FindAssets("t:Texture2D", new[] { importRoot }))
+                {
+                    var path     = AssetDatabase.GUIDToAssetPath(guid);
+                    var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+                    if (importer == null) continue;
+
+                    // 변경이 필요할 때만 저장 (불필요한 reimport 방지)
+                    bool changed = false;
+                    if (importer.mipmapEnabled)           { importer.mipmapEnabled = false;                          changed = true; }
+                    if (importer.textureCompression != TextureImporterCompression.Uncompressed)
+                                                          { importer.textureCompression = TextureImporterCompression.Uncompressed; changed = true; }
+                    if (importer.maxTextureSize > 1024)   { importer.maxTextureSize = 1024;                          changed = true; }
+                    if (changed) importer.SaveAndReimport();
+                }
+            }
+            finally { AssetDatabase.StopAssetEditing(); }
+            Debug.Log("[WarudoBuild] 텍스처 임포트 최속화 완료");
+        }
+
+        /// <summary>
+        /// 모든 FBX에 대해 머티리얼 External 추출 + 아바타는 Humanoid 리그를
+        /// 한 번의 SaveAndReimport()로 처리 (기존: FBX당 2회 → 1회로 통합).
+        /// </summary>
+        private static void ConfigureFbxImporters(
+            string avatarFbxPath, string clothingDir, string hairDir)
+        {
+            // 아바타: External 머티리얼 + Humanoid 한 번에
+            var avatarImporter = AssetImporter.GetAtPath(avatarFbxPath) as ModelImporter;
+            if (avatarImporter != null)
+            {
+                avatarImporter.materialLocation = ModelImporterMaterialLocation.External;
+                avatarImporter.animationType    = ModelImporterAnimationType.Human;
+                avatarImporter.avatarSetup      = ModelImporterAvatarSetup.CreateFromThisModel;
+                avatarImporter.SaveAndReimport();
+                Debug.Log($"[WarudoBuild] 아바타 FBX 설정 완료: {avatarFbxPath}");
+            }
+
+            // 의상/헤어: External 머티리얼만 (리그 불필요)
+            foreach (var dir in new[] { clothingDir, hairDir })
+            {
+                foreach (var fbxPath in FindAllFbx(dir))
+                {
+                    var imp = AssetImporter.GetAtPath(fbxPath) as ModelImporter;
+                    if (imp == null) continue;
+                    if (imp.materialLocation != ModelImporterMaterialLocation.External)
+                    {
+                        imp.materialLocation = ModelImporterMaterialLocation.External;
+                        imp.SaveAndReimport();
+                    }
+                }
+            }
         }
 
         // ──────────────────────────────────────────────────────
@@ -152,34 +224,6 @@ namespace WarudoConverter
             foreach (var guid in AssetDatabase.FindAssets("t:Model", new[] { assetDir }))
                 result.Add(AssetDatabase.GUIDToAssetPath(guid));
             return result;
-        }
-
-        // ──────────────────────────────────────────────────────
-        // FBX 머티리얼 외부 추출
-        // ──────────────────────────────────────────────────────
-
-        private static void ExtractMaterials(string fbxPath)
-        {
-            var importer = AssetImporter.GetAtPath(fbxPath) as ModelImporter;
-            if (importer == null) return;
-            // External: Unity가 fbxPath 옆 Materials/ 폴더에 .mat 파일 생성
-            importer.materialLocation = ModelImporterMaterialLocation.External;
-            importer.SaveAndReimport();
-            Debug.Log($"[WarudoBuild] 머티리얼 추출: {fbxPath}");
-        }
-
-        // ──────────────────────────────────────────────────────
-        // Humanoid 리그 설정
-        // ──────────────────────────────────────────────────────
-
-        private static void SetupHumanoidRig(string fbxPath)
-        {
-            var importer = AssetImporter.GetAtPath(fbxPath) as ModelImporter;
-            if (importer == null) return;
-            importer.animationType = ModelImporterAnimationType.Human;
-            importer.avatarSetup   = ModelImporterAvatarSetup.CreateFromThisModel;
-            importer.SaveAndReimport();
-            Debug.Log($"[WarudoBuild] Humanoid 설정: {fbxPath}");
         }
 
         // ──────────────────────────────────────────────────────
