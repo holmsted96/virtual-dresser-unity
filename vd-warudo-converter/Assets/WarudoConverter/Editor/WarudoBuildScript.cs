@@ -60,44 +60,67 @@ namespace WarudoConverter
             var clothingDir = $"{importRoot}/Clothing";
             var hairDir     = $"{importRoot}/Hair";
 
-            if (AssetDatabase.IsValidFolder(importRoot))
-                AssetDatabase.DeleteAsset(importRoot);
+            // ── 입력 해시 확인: 동일 입력이면 임포트 단계 전부 스킵 ──
+            // VDImport 폴더는 삭제하지 않고 캐시로 유지.
+            // CopyFiles는 기존 파일을 덮어쓰지 않으므로 변경된 파일만 복사됨.
+            // ConfigureFbxImporters / OptimizeTextureImportSettings 는 이미 설정됐으면 no-op.
+            var hashFile     = Path.Combine(Application.dataPath, $"VDImport_{avatarName}.hash");
+            var inputHash    = ComputeInputHash(inputPath);
+            var cachedHash   = File.Exists(hashFile) ? File.ReadAllText(hashFile).Trim() : "";
+            var cacheHit     = (cachedHash == inputHash) && AssetDatabase.IsValidFolder(importRoot);
 
-            // ── [1] 파일 복사: StartAssetEditing으로 묶어서 한 번만 임포트 ──
-            AssetDatabase.StartAssetEditing();
-            try
+            if (cacheHit)
             {
-                CopyFiles(inputPath,                           avatarDir,   topOnly: true);
-                CopyFiles(Path.Combine(inputPath, "clothing"), clothingDir, topOnly: false);
-                CopyFiles(Path.Combine(inputPath, "hair"),     hairDir,     topOnly: false);
+                Debug.Log($"[WarudoBuild] 입력 해시 일치 — 임포트 캐시 재사용 (스킵: 복사/임포트/설정)");
             }
-            finally { AssetDatabase.StopAssetEditing(); }
+            else
+            {
+                // 입력이 바뀐 경우만 폴더 초기화
+                if (AssetDatabase.IsValidFolder(importRoot))
+                    AssetDatabase.DeleteAsset(importRoot);
 
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                // ── [1] 파일 복사: StartAssetEditing으로 묶어서 한 번만 임포트 ──
+                AssetDatabase.StartAssetEditing();
+                try
+                {
+                    CopyFiles(inputPath,                           avatarDir,   topOnly: true);
+                    CopyFiles(Path.Combine(inputPath, "clothing"), clothingDir, topOnly: false);
+                    CopyFiles(Path.Combine(inputPath, "hair"),     hairDir,     topOnly: false);
+                }
+                finally { AssetDatabase.StopAssetEditing(); }
+
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+                // ── [3] 텍스처 임포트 설정 최속화 (압축 없음, 밉맵 없음) ──
+                OptimizeTextureImportSettings(importRoot);
+
+                // ── [4] FBX 설정을 한 번에 묶어서 적용 (ExtractMaterials + HumanoidRig) ──
+                AssetDatabase.StartAssetEditing();
+                try
+                {
+                    var avatarFbxPathTemp = FindLargestFbx(avatarDir);
+                    if (!string.IsNullOrEmpty(avatarFbxPathTemp))
+                        ConfigureFbxImporters(avatarFbxPathTemp, clothingDir, hairDir);
+                }
+                finally { AssetDatabase.StopAssetEditing(); }
+
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+                // 해시 저장 (성공 시)
+                File.WriteAllText(hashFile, inputHash);
+            }
 
             // ── [2] 아바타 FBX 찾기 ──
             var avatarFbxPath = FindLargestFbx(avatarDir);
             if (string.IsNullOrEmpty(avatarFbxPath))
                 throw new Exception("아바타 FBX 없음");
 
-            // ── [3] 텍스처 임포트 설정 최속화 (압축 없음, 밉맵 없음) ──
-            //    .warudo 패키징용이므로 최고속 설정 사용
-            OptimizeTextureImportSettings(importRoot);
-
-            // ── [4] FBX 설정을 한 번에 묶어서 적용 (ExtractMaterials + HumanoidRig) ──
-            //    SaveAndReimport()를 FBX당 1회만 호출
-            AssetDatabase.StartAssetEditing();
-            try
-            {
-                ConfigureFbxImporters(avatarFbxPath, clothingDir, hairDir);
-            }
-            finally { AssetDatabase.StopAssetEditing(); }
-
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-
             // ── [5] 텍스처 → 머티리얼 할당 ──
             var texByName = BuildTexByName(importRoot);
-            AssignTexturesToMaterials(importRoot, matTexMap, texByName);
+            AssignTexturesToMaterials(importRoot, matTexMap, smrBindings, texByName);
+            // ★ AssignTexturesToMaterials가 SetDirty+SaveAssets 했으므로
+            //   AssetDatabase를 강제 동기화해 FBX 프리팹이 최신 .mat를 참조하도록 함
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
             // ── [6] 결합 Prefab 생성 ──
             var prefabPath = BuildCombinedPrefab(
@@ -107,9 +130,36 @@ namespace WarudoConverter
             // ── [7] .warudo 빌드 ──
             BuildWarudoMod(prefabPath, outputPath, avatarName);
 
-            // ── [8] 정리 ──
-            AssetDatabase.DeleteAsset(importRoot);
+            // ── [8] Prefab만 정리 (VDImport 폴더는 캐시로 유지) ──
+            if (AssetDatabase.IsValidFolder(prefabPath.Replace(Path.GetFileName(prefabPath), "").TrimEnd('/')))
+            {
+                // prefab만 삭제 (임포트 캐시 폴더는 유지)
+            }
             AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// inputPath 안의 모든 FBX/텍스처 파일 크기 합산으로 빠른 해시 생성.
+        /// 파일 내용 해시(SHA256)는 너무 느리므로 크기+수정시각 조합 사용.
+        /// </summary>
+        private static string ComputeInputHash(string inputPath)
+        {
+            long total = 0;
+            var sb = new System.Text.StringBuilder();
+            foreach (var f in Directory.GetFiles(inputPath, "*", SearchOption.AllDirectories)
+                                        .OrderBy(x => x))
+            {
+                var ext = Path.GetExtension(f).ToLowerInvariant();
+                if (ext != ".fbx" && ext != ".png" && ext != ".jpg"
+                    && ext != ".jpeg" && ext != ".tga" && ext != ".psd"
+                    && ext != ".json") continue;
+                var info = new FileInfo(f);
+                total += info.Length;
+                sb.Append(info.Name).Append(':').Append(info.Length).Append(':')
+                  .Append(info.LastWriteTimeUtc.Ticks).Append(';');
+            }
+            // 단순 합산 해시 (암호화 목적 아님)
+            return $"{total}_{sb.Length}_{sb.ToString().GetHashCode()}";
         }
 
         /// <summary>
@@ -248,74 +298,110 @@ namespace WarudoConverter
         private static void AssignTexturesToMaterials(
             string importRoot,
             Dictionary<string, string> matTexMap,
+            List<SmrBinding> smrBindings,
             Dictionary<string, string> texByName)
         {
+            Debug.Log($"[WarudoBuild] AssignTextures: matTexMap={matTexMap.Count}개, texByName={texByName.Count}개, smrBindings={smrBindings.Count}개");
+            if (matTexMap.Count > 0)
+                Debug.Log($"[WarudoBuild] matTexMap 샘플: {string.Join(", ", matTexMap.Take(5).Select(kv => $"'{kv.Key}'→'{kv.Value}'"))}");
+            if (texByName.Count > 0)
+                Debug.Log($"[WarudoBuild] texByName 샘플: {string.Join(", ", texByName.Keys.Take(10))}");
+
             if (texByName.Count == 0) return;
+
+            // smrBindings에서 matName → textureName 역매핑 미리 구축
+            // (matTexMap에 없는 경우 smrBindings.materials[i] 기반 fallback에 사용)
+            var bindingMatTexMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in smrBindings)
+            {
+                if (b.Materials == null || b.Textures == null) continue;
+                for (int si = 0; si < b.Materials.Length; si++)
+                {
+                    var mName = b.Materials[si];
+                    var tName = si < b.Textures.Length ? b.Textures[si] : "null";
+                    if (string.IsNullOrEmpty(mName) || mName == "null") continue;
+                    if (string.IsNullOrEmpty(tName) || tName == "null") continue;
+                    if (!bindingMatTexMap.ContainsKey(mName))
+                        bindingMatTexMap[mName] = tName;
+                }
+            }
+            Debug.Log($"[WarudoBuild] bindingMatTexMap: {bindingMatTexMap.Count}개");
 
             // 외부 .mat 파일에 텍스처 할당
             int assigned = 0;
+            int skipped  = 0;
             foreach (var guid in AssetDatabase.FindAssets("t:Material", new[] { importRoot }))
             {
+                // Warudo/Mats 에 있는 .mat은 ApplySlotTextures에서 처리하므로 건너뜀
                 var matPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (matPath.Contains("/Warudo/")) continue;
+
                 var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
                 if (mat == null) continue;
 
-                // 1) manifest 매핑 우선 (앱에서 실제로 적용된 텍스처명)
                 string texPath = null;
+
+                // 1) manifest matTexMap 우선 (DresserUI에서 실제 적용된 텍스처명)
                 if (matTexMap.TryGetValue(mat.name, out var manifestTexName))
-                {
-                    // tex.name이 확장자 포함("Shinano_body.png")으로 저장되는 경우 대응
-                    var manifestKey = Path.GetFileNameWithoutExtension(manifestTexName);
+                    texPath = ResolveTexName(manifestTexName, texByName);
 
-                    // 정확 일치 우선
-                    texByName.TryGetValue(manifestKey, out texPath);
-                    if (texPath == null) texByName.TryGetValue(manifestTexName, out texPath);
+                // 2) smrBindings.materials[] 기반 fallback
+                if (texPath == null && bindingMatTexMap.TryGetValue(mat.name, out var bindingTexName))
+                    texPath = ResolveTexName(bindingTexName, texByName);
 
-                    // 부분 일치 fallback
-                    if (texPath == null)
-                    {
-                        foreach (var kv in texByName)
-                        {
-                            if (kv.Key.Equals(manifestKey, StringComparison.OrdinalIgnoreCase) ||
-                                kv.Key.IndexOf(manifestKey, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                manifestKey.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                texPath = kv.Value;
-                                break;
-                            }
-                        }
-                    }
-                    if (texPath != null)
-                        Debug.Log($"[WarudoBuild] manifest 매핑: {mat.name} ← {Path.GetFileName(texPath)}");
-                    else
-                        Debug.LogWarning($"[WarudoBuild] manifest에 '{manifestTexName}'이 있지만 텍스처 없음");
-                }
-
-                // 2) manifest에 없으면 이름 기반 fallback
+                // 3) 이름 기반 마지막 fallback
                 if (texPath == null)
                     texPath = FindBestTexture(mat.name, texByName);
 
                 if (texPath == null)
                 {
-                    Debug.LogWarning($"[WarudoBuild] 텍스처 없음: {mat.name}");
+                    bool inManifest   = matTexMap.ContainsKey(mat.name);
+                    bool inBindingMap = bindingMatTexMap.ContainsKey(mat.name);
+                    Debug.LogWarning($"[WarudoBuild] 텍스처 없음: mat='{mat.name}' " +
+                        $"manifest={inManifest} binding={inBindingMap}");
+                    skipped++;
                     continue;
                 }
 
                 var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(texPath);
-                if (tex == null) continue;
+                if (tex == null) { skipped++; continue; }
 
                 if (mat.HasProperty("_MainTex"))   mat.SetTexture("_MainTex", tex);
                 if (mat.HasProperty("_BaseMap"))   mat.SetTexture("_BaseMap",  tex);
-                if (mat.HasProperty("_Color"))     mat.SetColor("_Color",    Color.white);
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+                // _Color가 거의 검정(기본값 미설정)일 때만 white로 교정 — 의도된 tint는 유지
+                FixBlackColor(mat, "_Color");
+                FixBlackColor(mat, "_BaseColor");
 
                 EditorUtility.SetDirty(mat);
-                Debug.Log($"[WarudoBuild] 텍스처 할당: {mat.name} ← {Path.GetFileName(texPath)}");
                 assigned++;
             }
 
             AssetDatabase.SaveAssets();
-            Debug.Log($"[WarudoBuild] 텍스처 할당 완료: {assigned}개 머티리얼");
+            Debug.Log($"[WarudoBuild] 텍스처 할당 완료: {assigned}개 성공, {skipped}개 실패");
+        }
+
+        /// <summary>
+        /// 텍스처 이름(확장자 있음/없음 모두)으로 texByName에서 경로 탐색.
+        /// 정확 일치 → 부분 일치 순서.
+        /// </summary>
+        private static string ResolveTexName(string texName, Dictionary<string, string> texByName)
+        {
+            if (string.IsNullOrEmpty(texName) || texName == "null") return null;
+            var key = Path.GetFileNameWithoutExtension(texName);
+
+            // 정확 일치
+            if (texByName.TryGetValue(key,     out var p)) return p;
+            if (texByName.TryGetValue(texName, out     p)) return p;
+
+            // 부분 일치
+            foreach (var kv in texByName)
+            {
+                if (kv.Key.Equals(key, StringComparison.OrdinalIgnoreCase) ||
+                    kv.Key.IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    key.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return kv.Value;
+            }
+            return null;
         }
 
         private static string FindBestTexture(
@@ -343,6 +429,19 @@ namespace WarudoConverter
                 if (name.StartsWith(p, StringComparison.OrdinalIgnoreCase))
                     return name.Substring(p.Length);
             return null;
+        }
+
+        /// <summary>
+        /// 머티리얼의 색상 프로퍼티가 거의 검정(rgba 모두 0.05 미만)인 경우에만 white로 교정.
+        /// FBX 임포트 기본값이 검정인 경우 텍스처가 안 보이는 문제 방지.
+        /// 의도된 tint 색상(피부색, 머리색 등)은 그대로 유지.
+        /// </summary>
+        private static void FixBlackColor(Material mat, string prop)
+        {
+            if (!mat.HasProperty(prop)) return;
+            var c = mat.GetColor(prop);
+            if (c.r < 0.05f && c.g < 0.05f && c.b < 0.05f)
+                mat.SetColor(prop, Color.white);
         }
 
         // ──────────────────────────────────────────────────────
@@ -378,8 +477,20 @@ namespace WarudoConverter
             TransplantMissingBones(hairAssetDir,     root, boneMap);
 
             // ── 의상 / 헤어 SMR 이식 ──
-            TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, texByName, "Clothing", excludedMeshes);
-            TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, texByName, "Hair",     excludedMeshes);
+            // ★ matSaveDir을 TransplantSmrs 전에 AssetDatabase에 등록해야
+            //   ApplySlotTextures의 AssetDatabase.CreateAsset이 성공함.
+            //   Directory.CreateDirectory 후 AssetDatabase.Refresh 없으면
+            //   CreateAsset이 "unknown folder" 오류로 조용히 실패함.
+            var prefabDir  = $"{importRoot}/Warudo";
+            var matSaveDir = $"{prefabDir}/Mats";
+            var fullPrefabDir = Path.Combine(Application.dataPath, prefabDir.Replace("Assets/", ""));
+            var fullMatDir    = Path.Combine(Application.dataPath, matSaveDir.Replace("Assets/", ""));
+            Directory.CreateDirectory(fullPrefabDir);
+            Directory.CreateDirectory(fullMatDir);
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, texByName, "Clothing", excludedMeshes, matSaveDir);
+            TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, texByName, "Hair",     excludedMeshes, matSaveDir);
 
             // ── 아바타 SMR 중 제외 목록 비활성화 ──
             foreach (var smr in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -392,9 +503,8 @@ namespace WarudoConverter
             }
 
             // ── Prefab 저장 ──
-            var prefabDir  = $"{importRoot}/Warudo";
-            Directory.CreateDirectory(Path.Combine(
-                Application.dataPath, prefabDir.Replace("Assets/", "")));
+            // (prefabDir/matSaveDir은 위에서 이미 생성 및 refresh 완료)
+            AssetDatabase.SaveAssets();  // TransplantSmrs에서 생성한 .mat 파일 확정 저장
             AssetDatabase.Refresh();
 
             var prefabPath = $"{prefabDir}/Character.prefab";
@@ -420,11 +530,22 @@ namespace WarudoConverter
         /// SMR의 sharedMaterials를 복제해 슬롯별 텍스처를 적용한 배열 반환.
         /// texNames[i] = "null" 이거나 텍스처를 못 찾으면 원본 머티리얼 유지.
         /// </summary>
+        /// <summary>
+        /// SMR 슬롯별 텍스처를 적용한 Material[] 반환.
+        /// 반드시 .mat 파일로 저장해야 prefab serialization이 올바르게 됨.
+        /// 메모리 인스턴스(Instantiate)는 SaveAsPrefabAsset 시 텍스처 참조가 유실됨.
+        /// </summary>
         private static Material[] ApplySlotTextures(
             Material[] srcMaterials,
             string[] texNames,
-            Dictionary<string, string> texByName)
+            Dictionary<string, string> texByName,
+            string matSaveDir,
+            string smrName)
         {
+            // matSaveDir 폴더 보장
+            Directory.CreateDirectory(Path.Combine(
+                Application.dataPath, matSaveDir.Replace("Assets/", "")));
+
             var result = new Material[srcMaterials.Length];
             for (int i = 0; i < srcMaterials.Length; i++)
             {
@@ -455,17 +576,46 @@ namespace WarudoConverter
                 var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(texPath);
                 if (tex == null) { result[i] = src; continue; }
 
-                // 머티리얼 복제 후 텍스처 적용
-                var mat = UnityEngine.Object.Instantiate(src);
-                mat.name = src.name;
+                // ★ 머티리얼을 .mat Asset으로 저장
+                // Instantiate() 인스턴스는 SaveAsPrefabAsset 시 텍스처 참조 유실
+                var safeName = string.Concat(
+                    (smrName + "_slot" + i).Select(c =>
+                        Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+                var matPath = $"{matSaveDir}/{safeName}.mat";
+
+                // 기존 .mat 재사용 (중복 생성 방지)
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+                if (mat == null)
+                {
+                    mat = new Material(src.shader);
+                    AssetDatabase.CreateAsset(mat, matPath);
+                    // ★ CreateAsset 후 실제로 Asset으로 등록됐는지 확인
+                    if (AssetDatabase.LoadAssetAtPath<Material>(matPath) == null)
+                    {
+                        Debug.LogError($"[WarudoBuild] CreateAsset 실패: {matPath} — matSaveDir이 AssetDatabase에 미등록 상태. Refresh 필요.");
+                        result[i] = src;
+                        continue;
+                    }
+                }
+                else
+                {
+                    mat.shader = src.shader;
+                }
+
+                // 원본 속성 복사 후 텍스처만 덮어쓰기 — 색상(tint)은 원본 유지
+                mat.CopyPropertiesFromMaterial(src);
                 if (mat.HasProperty("_MainTex"))   mat.SetTexture("_MainTex",  tex);
                 if (mat.HasProperty("_BaseMap"))   mat.SetTexture("_BaseMap",  tex);
-                if (mat.HasProperty("_Color"))     mat.SetColor("_Color",    Color.white);
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
-                result[i] = mat;
+                // _Color가 거의 검정(기본값 미설정)일 때만 white로 교정
+                FixBlackColor(mat, "_Color");
+                FixBlackColor(mat, "_BaseColor");
+                EditorUtility.SetDirty(mat);
 
-                Debug.Log($"[WarudoBuild] 슬롯[{i}] 텍스처: {src.name} ← {Path.GetFileName(texPath)}");
+                result[i] = mat;
+                Debug.Log($"[WarudoBuild] 슬롯[{i}] .mat 저장: {matPath} ← {Path.GetFileName(texPath)}");
             }
+
+            AssetDatabase.SaveAssets();
             return result;
         }
 
@@ -538,7 +688,8 @@ namespace WarudoConverter
             Dictionary<string, SmrBinding> bindingMap,
             Dictionary<string, string> texByName,
             string groupName,
-            HashSet<string> excludedMeshes)
+            HashSet<string> excludedMeshes,
+            string matSaveDir)
         {
             var fbxPaths = FindAllFbx(srcAssetDir);
             if (fbxPaths.Count == 0) return;
@@ -570,7 +721,26 @@ namespace WarudoConverter
                     Transform[] reboundBones;
                     Transform   reboundRoot;
 
-                    if (bindingMap.TryGetValue(smr.name, out var binding) &&
+                    // binding 탐색: 정확 일치 → 퍼지 매칭 (TriLib vs Unity FBX importer 이름 차이 대응)
+                    SmrBinding binding = null;
+                    bindingMap.TryGetValue(smr.name, out binding);
+                    if (binding == null)
+                    {
+                        // 퍼지: 공백/숫자 suffix 무시하고 포함 관계 확인
+                        var nameLow = smr.name.ToLowerInvariant();
+                        foreach (var kv in bindingMap)
+                        {
+                            var kLow = kv.Key.ToLowerInvariant();
+                            if (nameLow.Contains(kLow) || kLow.Contains(nameLow))
+                            {
+                                binding = kv.Value;
+                                Debug.Log($"[WarudoBuild] SMR 퍼지 매칭: '{smr.name}' → binding='{kv.Key}'");
+                                break;
+                            }
+                        }
+                    }
+
+                    if (binding != null &&
                         binding.BoneNames.Length == smr.bones.Length)
                     {
                         // manifest에 기록된 본 이름 순서 그대로 사용
@@ -635,17 +805,41 @@ namespace WarudoConverter
                     newSmr.localBounds     = smr.localBounds;
 
                     // ── 슬롯별 텍스처 직접 적용 ──
-                    // manifest의 textures[] 인덱스가 일치하면 이름 매핑 없이 바로 적용
                     if (binding != null &&
                         binding.Textures != null &&
                         binding.Textures.Length == smr.sharedMaterials.Length)
                     {
+                        // manifest의 textures[] 인덱스 기반으로 정확 적용
                         newSmr.sharedMaterials = ApplySlotTextures(
-                            smr.sharedMaterials, binding.Textures, texByName);
+                            smr.sharedMaterials, binding.Textures, texByName,
+                            matSaveDir, smr.name);
+                    }
+                    else if (binding != null && binding.Materials != null &&
+                             binding.Textures != null)
+                    {
+                        // 슬롯 수 불일치 시 materials[] 이름 기반으로 재매핑
+                        var slotTexNames = smr.sharedMaterials.Select(m =>
+                        {
+                            if (m == null) return "null";
+                            for (int si = 0; si < binding.Materials.Length; si++)
+                            {
+                                if (string.Equals(binding.Materials[si], m.name,
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                    si < binding.Textures.Length)
+                                    return binding.Textures[si];
+                            }
+                            return "null";
+                        }).ToArray();
+                        newSmr.sharedMaterials = ApplySlotTextures(
+                            smr.sharedMaterials, slotTexNames, texByName,
+                            matSaveDir, smr.name);
                     }
                     else
                     {
+                        // binding 없음: AssignTexturesToMaterials가 이미 External .mat에
+                        // 텍스처를 할당했으므로 sharedMaterials를 그대로 사용
                         newSmr.sharedMaterials = smr.sharedMaterials;
+                        Debug.Log($"[WarudoBuild] 바인딩 없음 ({groupName}/{smr.name}) — External mat 직접 사용");
                     }
                     count++;
                 }

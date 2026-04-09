@@ -39,6 +39,37 @@ namespace VirtualDresser.Runtime
         // ★ OrdinalIgnoreCase: TriLib 머티리얼 이름 대소문자가 .mat 파일명과 다를 수 있음
         public Dictionary<string, MaterialTextures> MaterialTextureMap =
             new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// FBX externalObjects에서 추출: FBX 내부 머티리얼 이름 → .mat 파일 이름
+        /// (예: "マテリアル" → "Body_2")
+        /// TriLib이 로드한 mat.name이 FBX 내부 이름이므로, 이를 .mat 파일명으로 변환할 때 사용
+        /// </summary>
+        public Dictionary<string, string> FbxMaterialMap =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// .prefab 파일에서 추출한 SkinnedMeshRenderer별 블렌드쉐이프 웨이트.
+        /// 키: 메시 GUID (FBX fileID에서 추출) 또는 순서 인덱스 "idx:N"
+        /// 값: float[] — 블렌드쉐이프 인덱스 순서대로
+        /// </summary>
+        public List<PrefabSmrData> PrefabSmrDataList = new();
+    }
+
+    /// <summary>
+    /// .prefab YAML에서 파싱한 SkinnedMeshRenderer 블렌드쉐이프 데이터.
+    ///
+    /// 두 가지 prefab 포맷을 모두 지원:
+    ///   A) 일반 Prefab (type 137 SMR):  BlendShapeWeights 밀집 배열
+    ///   B) PrefabInstance (type 1001):  SparseWeights 스파스 딕셔너리 {index → value}
+    /// </summary>
+    public class PrefabSmrData
+    {
+        public string GoName;             // SMR이 붙은 GameObject 이름 (매칭 키, B형은 null 가능)
+        public string MeshGuid;           // FBX 파일 GUID (target.guid)
+        public string TargetFileId;       // FBX 내 컴포넌트 fileID (B형 그룹핑 키)
+        public float[] BlendShapeWeights; // A형: 밀집 배열 (index 0부터 순서대로)
+        public Dictionary<int, float> SparseWeights; // B형: {blendshape index → value}
     }
 
     public class MaterialTextures
@@ -123,7 +154,7 @@ namespace VirtualDresser.Runtime
             };
 
             // 백그라운드 스레드에서 tar 스트리밍 (메인 스레드 블로킹 방지)
-            var (guidToPathname, guidToTempAsset) =
+            var (guidToPathname, guidToTempAsset, guidToTempMeta) =
                 await Task.Run(() => StreamTarToDisk(packagePath, tempDir));
 
             result.TotalEntries = guidToPathname.Count;
@@ -157,6 +188,105 @@ namespace VirtualDresser.Runtime
             }
 
             Debug.Log($"[Parser] .mat 파싱 완료: {result.MaterialTextureMap.Count}개");
+
+            // ── 1.2패스: .prefab 파일 파싱 → SkinnedMeshRenderer 블렌드쉐이프 웨이트 추출 ──
+            var prefabPaths = guidToPathname
+                .Where(kv => Path.GetExtension(kv.Value)
+                    .Equals(".prefab", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Debug.Log($"[Parser] .prefab 파일 {prefabPaths.Count}개 발견: " +
+                      string.Join(", ", prefabPaths.Select(kv => Path.GetFileName(kv.Value))));
+
+            foreach (var (guid, pathname) in prefabPaths)
+            {
+                if (!guidToTempAsset.TryGetValue(guid, out var tmpPath))
+                {
+                    Debug.LogWarning($"[Parser] .prefab temp 파일 없음 (이미 삭제?): {pathname}");
+                    continue;
+                }
+
+                try
+                {
+                    var prefabText = File.ReadAllText(tmpPath);
+                    Debug.Log($"[Parser] .prefab 읽기: {pathname} ({prefabText.Length}자)");
+
+                    // 진단: m_BlendShapeWeights 포함 여부 확인
+                    bool hasWeightsDense  = prefabText.Contains("m_BlendShapeWeights:");
+                    bool hasWeightsSparse = prefabText.Contains("m_BlendShapeWeights.Array.data[");
+                    bool hasSMR           = prefabText.Contains("!u!137");
+                    bool hasPrefabInst    = prefabText.Contains("!u!1001");
+                    Debug.Log($"[Parser] .prefab 분석: hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
+                              $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
+
+                    var smrDataList = ParsePrefabBlendShapes(prefabText);
+                    result.PrefabSmrDataList.AddRange(smrDataList);
+
+                    if (smrDataList.Count > 0)
+                    {
+                        int denseCount  = smrDataList.Count(d => d.BlendShapeWeights != null);
+                        int sparseCount = smrDataList.Count(d => d.SparseWeights != null);
+                        Debug.Log($"[Parser] .prefab 블렌드쉐이프: dense={denseCount}개, sparse={sparseCount}개 / {pathname}\n" +
+                                  string.Join("\n", smrDataList.Select(d =>
+                                      d.SparseWeights != null
+                                          ? $"  [sparse] fileID={d.TargetFileId} 항목={d.SparseWeights.Count}개: " +
+                                            string.Join(", ", d.SparseWeights.Take(5).Select(kv => $"[{kv.Key}]={kv.Value}"))
+                                          : $"  [dense]  GoName='{d.GoName}' 웨이트수={d.BlendShapeWeights.Length} " +
+                                            $"비0={d.BlendShapeWeights.Count(w => w != 0)}")));
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[Parser] .prefab 파싱 결과 0개: {pathname} — " +
+                                         $"hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
+                                         $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Parser] .prefab 읽기 실패: {pathname} — {ex.Message}\n{ex.StackTrace}");
+                }
+                finally
+                {
+                    try { File.Delete(tmpPath); } catch { }
+                    guidToTempAsset.Remove(guid);
+                }
+            }
+
+            // ── 1.5패스: FBX .meta 파싱 → externalObjects로 FBX 내부 mat명 → .mat 파일명 매핑 ──
+            Debug.Log($"[Parser] meta 파일 저장 수: {guidToTempMeta.Count}개");
+            foreach (var (guid, pathname) in guidToPathname)
+            {
+                if (!Path.GetExtension(pathname).Equals(".fbx", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                Debug.Log($"[Parser] FBX 발견: {Path.GetFileName(pathname)}, meta 있음={guidToTempMeta.ContainsKey(guid)}");
+                if (!guidToTempMeta.TryGetValue(guid, out var metaPath)) continue;
+
+                try
+                {
+                    var metaText = File.ReadAllText(metaPath);
+                    // externalObjects 섹션 존재 여부 진단
+                    bool hasExtObj = metaText.Contains("externalObjects:");
+                    Debug.Log($"[Parser] {Path.GetFileName(pathname)}.meta: {metaText.Length}자, externalObjects={hasExtObj}");
+                    ParseFbxMeta(metaText, guidToPathname, result.FbxMaterialMap);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Parser] FBX meta 읽기 실패: {pathname} — {ex.Message}");
+                }
+                finally
+                {
+                    try { File.Delete(metaPath); } catch { }
+                    guidToTempMeta.Remove(guid);
+                }
+            }
+
+            // 남은 meta 파일 정리
+            foreach (var mp in guidToTempMeta.Values)
+                try { if (File.Exists(mp)) File.Delete(mp); } catch { }
+
+            if (result.FbxMaterialMap.Count > 0)
+                Debug.Log($"[Parser] FBX externalObjects 매핑: {result.FbxMaterialMap.Count}개 " +
+                          $"(예: {string.Join(", ", result.FbxMaterialMap.Take(3).Select(kv => $"'{kv.Key}'→'{kv.Value}'"))})");
 
             // ── 2패스: FBX + 텍스처 temp 파일을 최종 위치로 이동 ──
             var fbxBySize = new List<(string path, long size)>();
@@ -208,11 +338,13 @@ namespace VirtualDresser.Runtime
         /// </summary>
         private static (
             Dictionary<string, string> guidToPathname,
-            Dictionary<string, string> guidToTempAsset)
+            Dictionary<string, string> guidToTempAsset,
+            Dictionary<string, string> guidToTempMeta)
             StreamTarToDisk(string packagePath, string tempDir)
         {
             var guidToPathname  = new Dictionary<string, string>();
             var guidToTempAsset = new Dictionary<string, string>();
+            var guidToTempMeta  = new Dictionary<string, string>();
 
             using var fs  = File.OpenRead(packagePath);
             using var gz  = new GZipInputStream(fs);
@@ -250,8 +382,11 @@ namespace VirtualDresser.Runtime
                 }
                 else if (filename == "asset.meta")
                 {
-                    // asset.meta는 불필요 → 스킵
-                    tar.CopyEntryContents(Stream.Null);
+                    // FBX meta에 externalObjects(머티리얼 매핑) 정보가 있으므로 저장
+                    var metaPath = Path.Combine(tempDir, guid + "_meta.tmp");
+                    using var outMeta = File.Create(metaPath);
+                    tar.CopyEntryContents(outMeta);
+                    guidToTempMeta[guid] = metaPath;
                 }
                 else
                 {
@@ -260,7 +395,89 @@ namespace VirtualDresser.Runtime
                 }
             }
 
-            return (guidToPathname, guidToTempAsset);
+            return (guidToPathname, guidToTempAsset, guidToTempMeta);
+        }
+
+        // ─── FBX .meta 파싱 (externalObjects: FBX 내부 머티리얼명 → 외부 .mat GUID) ───
+        private static void ParseFbxMeta(
+            string metaText,
+            Dictionary<string, string> guidToPathname,
+            Dictionary<string, string> fbxMaterialMap)
+        {
+            // externalObjects 블록 라인 기반 파싱
+            // 구조:
+            //   - first:
+            //       type: UnityEngine:Material
+            //       assembly: ...
+            //       name: マテリアル
+            //     second:
+            //       guid: abc123...
+            //       type: 2
+
+            bool inExternalObjects = false;
+            bool inMaterialEntry   = false;
+            string pendingName     = null;
+            int mappedCount        = 0;
+
+            foreach (var rawLine in metaText.Split('\n'))
+            {
+                var line = rawLine.TrimEnd();
+
+                if (!inExternalObjects)
+                {
+                    if (line.TrimStart().StartsWith("externalObjects:"))
+                        inExternalObjects = true;
+                    continue;
+                }
+
+                // externalObjects 종료 감지 (들여쓰기 0 또는 다른 최상위 키)
+                if (line.Length > 0 && line[0] != ' ' && line[0] != '-')
+                {
+                    inExternalObjects = false;
+                    continue;
+                }
+
+                var trimmed = line.TrimStart();
+
+                if (trimmed.StartsWith("- first:"))
+                {
+                    inMaterialEntry = false;
+                    pendingName     = null;
+                    continue;
+                }
+
+                if (trimmed.StartsWith("type: UnityEngine:Material"))
+                {
+                    inMaterialEntry = true;
+                    continue;
+                }
+
+                if (!inMaterialEntry) continue;
+
+                if (trimmed.StartsWith("name:"))
+                {
+                    pendingName = trimmed.Substring(5).Trim();
+                    continue;
+                }
+
+                if (trimmed.StartsWith("guid:") && pendingName != null)
+                {
+                    var matGuid = trimmed.Substring(5).Trim();
+                    if (guidToPathname.TryGetValue(matGuid, out var matPath))
+                    {
+                        var matName = Path.GetFileNameWithoutExtension(matPath);
+                        fbxMaterialMap[pendingName] = matName;
+                        mappedCount++;
+                        Debug.Log($"[Parser] externalObj: '{pendingName}' → '{matName}'");
+                    }
+                    else
+                    {
+                        Debug.Log($"[Parser] externalObj GUID 미해결: '{pendingName}' guid={matGuid}");
+                    }
+                    pendingName     = null;
+                    inMaterialEntry = false;
+                }
+            }
         }
 
         // ─── .mat 파일 파싱 ───
@@ -418,6 +635,287 @@ namespace VirtualDresser.Runtime
                     result.ExtractedFbxPaths.Add(outPath);
                 }
             }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // .prefab YAML 파싱 — SkinnedMeshRenderer 블렌드쉐이프 웨이트 추출
+        // ─────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Unity .prefab(YAML) 텍스트를 2패스로 파싱해
+        /// SkinnedMeshRenderer별 GO이름 + 블렌드쉐이프 웨이트를 추출합니다.
+        ///
+        /// ── Unity YAML 구조 ──
+        ///   --- !u!1 &1111          ← GameObject 블록 (type 1)
+        ///   GameObject:
+        ///     m_Name: Body
+        ///     m_Component:
+        ///     - component: {fileID: 2222}
+        ///
+        ///   --- !u!137 &2222        ← SkinnedMeshRenderer 블록 (type 137)
+        ///   SkinnedMeshRenderer:
+        ///     m_GameObject: {fileID: 1111}
+        ///     m_Mesh: {fileID: 4300000, guid: abc123, type: 3}
+        ///     m_BlendShapeWeights:
+        ///     - 0
+        ///     - 50
+        ///     - 100
+        ///
+        /// ── 매칭 흐름 ──
+        ///   1패스: fileID → (type, 내용) 수집
+        ///   2패스: SMR.m_GameObject.fileID → GO.m_Name 역참조 → GoName 확정
+        /// </summary>
+        private static List<PrefabSmrData> ParsePrefabBlendShapes(string prefabYaml)
+        {
+            if (string.IsNullOrEmpty(prefabYaml)) return new List<PrefabSmrData>();
+
+            // ── 1패스: 모든 블록을 fileID → 줄 목록으로 수집 ──
+            var fileIdLines = new Dictionary<string, (int type, List<string> lines)>();
+
+            string currentId   = null;
+            int    currentType = 0;
+            List<string> currentLines = null;
+
+            var allLines = prefabYaml.Split('\n');
+            var headerRx = new System.Text.RegularExpressions.Regex(
+                @"^---\s+!u!(\d+)\s+&(-?\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            foreach (var raw in allLines)
+            {
+                var line = raw.TrimEnd('\r');
+                var m = headerRx.Match(line);
+                if (m.Success)
+                {
+                    if (currentId != null)
+                        fileIdLines[currentId] = (currentType, currentLines);
+
+                    currentType  = int.Parse(m.Groups[1].Value);
+                    currentId    = m.Groups[2].Value;
+                    currentLines = new List<string>();
+                    continue;
+                }
+                currentLines?.Add(line);
+            }
+            if (currentId != null)
+                fileIdLines[currentId] = (currentType, currentLines);
+
+            // ── 2패스: GameObject(type=1) 이름 맵 구축 ──
+            // fileID → m_Name
+            var goNames = new Dictionary<string, string>();
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 1) continue;   // 1 = GameObject
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+                    if (t.StartsWith("m_Name:"))
+                    {
+                        goNames[kv.Key] = t.Substring("m_Name:".Length).Trim();
+                        break;
+                    }
+                }
+            }
+
+            // ── 3패스: SkinnedMeshRenderer(type=137) 파싱 ──
+            var result = new List<PrefabSmrData>();
+
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 137) continue;  // 137 = SkinnedMeshRenderer
+
+                string goFileId   = null;
+                string meshGuid   = null;
+                var    weights    = new List<float>();
+                bool   inWeights  = false;
+
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+
+                    // m_GameObject 역참조
+                    if (goFileId == null && t.StartsWith("m_GameObject:"))
+                    {
+                        var gm = System.Text.RegularExpressions.Regex.Match(t, @"fileID:\s*(-?\d+)");
+                        if (gm.Success) goFileId = gm.Groups[1].Value;
+                        continue;
+                    }
+
+                    // m_Mesh guid
+                    if (meshGuid == null && t.StartsWith("m_Mesh:") && t.Contains("guid:"))
+                    {
+                        var gm = System.Text.RegularExpressions.Regex.Match(t, @"guid:\s*([0-9a-f]{32})");
+                        if (gm.Success) meshGuid = gm.Groups[1].Value;
+                        continue;
+                    }
+
+                    // m_BlendShapeWeights 섹션
+                    if (t.StartsWith("m_BlendShapeWeights:"))
+                    {
+                        inWeights = true;
+                        continue;
+                    }
+
+                    if (inWeights)
+                    {
+                        if (t.StartsWith("- "))
+                        {
+                            var valStr = t.Substring(2).Trim();
+                            if (float.TryParse(valStr,
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                out var val))
+                                weights.Add(val);
+                        }
+                        else if (t.Length > 0 && !t.StartsWith("#"))
+                        {
+                            inWeights = false;
+                        }
+                    }
+                }
+
+                if (weights.Count == 0) continue;
+
+                // GO 이름 역참조
+                var goName = (goFileId != null && goNames.TryGetValue(goFileId, out var n)) ? n : null;
+
+                result.Add(new PrefabSmrData
+                {
+                    GoName            = goName,
+                    MeshGuid          = meshGuid,
+                    BlendShapeWeights = weights.ToArray()
+                });
+            }
+
+            // ── 4패스: PrefabInstance(type=1001) 스파스 블렌드쉐이프 파싱 ──
+            // YAML 구조:
+            //   PrefabInstance:
+            //     m_Modification:
+            //       m_Modifications:
+            //       - target: {fileID: 4937543, guid: abc123, type: 3}
+            //         propertyPath: m_BlendShapeWeights.Array.data[12]
+            //         value: 100
+            //
+            // fileID 그룹별로 스파스 딕셔너리를 모아서 PrefabSmrData 생성.
+            var bsIndexRx = new System.Text.RegularExpressions.Regex(
+                @"m_BlendShapeWeights\.Array\.data\[(\d+)\]",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+            var targetRx = new System.Text.RegularExpressions.Regex(
+                @"fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-f]{32}))?",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 1001) continue;  // 1001 = PrefabInstance
+
+                // {targetFileId → {bsIndex → value}}
+                var sparseMap = new Dictionary<string, Dictionary<int, float>>();
+                // {targetFileId → meshGuid}
+                var guidMap   = new Dictionary<string, string>();
+
+                string currentTargetFileId = null;
+                int    pendingBsIndex      = -1;   // propertyPath에서 읽은 BS 인덱스 (value 대기 중)
+                bool   inModifications     = false;
+
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+
+                    if (t.StartsWith("m_Modifications:"))
+                    {
+                        inModifications = true;
+                        continue;
+                    }
+                    if (!inModifications) continue;
+
+                    // 새 수정 항목: "- target: {fileID: N, guid: G, type: 3}"
+                    if (t.StartsWith("- target:"))
+                    {
+                        pendingBsIndex = -1;   // 이전 항목 리셋
+                        var tm = targetRx.Match(t);
+                        if (tm.Success)
+                        {
+                            currentTargetFileId = tm.Groups[1].Value;
+                            if (tm.Groups[2].Success)
+                                guidMap[currentTargetFileId] = tm.Groups[2].Value;
+                        }
+                        continue;
+                    }
+
+                    if (currentTargetFileId == null) continue;
+
+                    // propertyPath: m_BlendShapeWeights.Array.data[N]
+                    if (t.StartsWith("propertyPath:"))
+                    {
+                        var bm = bsIndexRx.Match(t);
+                        pendingBsIndex = bm.Success ? int.Parse(bm.Groups[1].Value) : -1;
+                        continue;
+                    }
+
+                    // value: N  — pendingBsIndex가 유효할 때만 처리
+                    if (t.StartsWith("value:") && pendingBsIndex >= 0)
+                    {
+                        var valStr = t.Substring("value:".Length).Trim();
+                        if (float.TryParse(valStr,
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var val) && val != 0f)
+                        {
+                            if (!sparseMap.ContainsKey(currentTargetFileId))
+                                sparseMap[currentTargetFileId] = new Dictionary<int, float>();
+                            sparseMap[currentTargetFileId][pendingBsIndex] = val;
+                        }
+                        pendingBsIndex = -1;
+                        continue;
+                    }
+
+                    // objectReference 등 다른 필드는 pendingBsIndex 리셋
+                    if (!t.StartsWith("value:") && !t.StartsWith("propertyPath:") &&
+                        !t.StartsWith("- target:") && t.Length > 0)
+                    {
+                        pendingBsIndex = -1;
+                    }
+                }
+
+                // 스파스 데이터가 0이 아닌 항목만 유의미하므로 필터링 후 PrefabSmrData 생성
+                foreach (var sm in sparseMap)
+                {
+                    var nonZero = sm.Value.Where(p => p.Value != 0f)
+                                         .ToDictionary(p => p.Key, p => p.Value);
+                    if (nonZero.Count == 0) continue;
+
+                    guidMap.TryGetValue(sm.Key, out var meshGuid);
+
+                    // targetFileId가 stripped type 137 블록의 fileID와 일치하면 GO 이름 추출 시도
+                    string sparseGoName = null;
+                    if (fileIdLines.TryGetValue(sm.Key, out var smrBlock) && smrBlock.type == 137)
+                    {
+                        foreach (var bl in smrBlock.lines)
+                        {
+                            var bt = bl.TrimStart();
+                            if (bt.StartsWith("m_GameObject:"))
+                            {
+                                var bgm = System.Text.RegularExpressions.Regex.Match(bt, @"fileID:\s*(-?\d+)");
+                                if (bgm.Success && goNames.TryGetValue(bgm.Groups[1].Value, out var bgn))
+                                    sparseGoName = bgn;
+                                break;
+                            }
+                        }
+                    }
+
+                    result.Add(new PrefabSmrData
+                    {
+                        GoName         = sparseGoName,
+                        MeshGuid       = meshGuid,
+                        TargetFileId   = sm.Key,
+                        SparseWeights  = nonZero
+                    });
+                }
+            }
+
+            Debug.Log($"[Parser] ParsePrefabBlendShapes: type137={result.Count(r => r.SparseWeights == null)}개, " +
+                      $"type1001={result.Count(r => r.SparseWeights != null)}개");
+
+            return result;
         }
     }
 }
