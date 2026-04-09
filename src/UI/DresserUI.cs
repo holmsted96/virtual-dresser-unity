@@ -1488,10 +1488,12 @@ namespace VirtualDresser.UI
                 // 레포는 별도 위치이므로 상위 드라이브부터 검색
                 var candidates = new[]
                 {
-                    // git 레포가 c:/vd/ 아래 있을 경우 (심볼릭 링크 등)
+                    // 배포된 build 경로 우선 (OneDrive 밖 → UMod 빌드 권한 문제 없음)
+                    "c:/vd/build/vd-warudo-converter",
+                    // git 레포가 c:/vd/ 아래 있을 경우
                     Path.GetFullPath(Path.Combine(Application.dataPath,
                         "..", "..", "virtual-dresser-unity", "vd-warudo-converter")),
-                    // OneDrive 표준 경로
+                    // OneDrive 경로 (권한 문제 발생 가능 — 최후 fallback)
                     Path.Combine(System.Environment.GetFolderPath(
                         System.Environment.SpecialFolder.UserProfile),
                         "OneDrive", "업무용PC", "vibe coding",
@@ -1501,7 +1503,7 @@ namespace VirtualDresser.UI
                 foreach (var c in candidates)
                     if (Directory.Exists(c)) return c;
 
-                return candidates[0]; // 없으면 첫 번째 반환 (오류 메시지용)
+                return candidates[0];
 #else
                 return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "vd-warudo-converter"));
 #endif
