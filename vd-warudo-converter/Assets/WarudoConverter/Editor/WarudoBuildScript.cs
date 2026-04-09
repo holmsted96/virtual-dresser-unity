@@ -545,6 +545,26 @@ namespace WarudoConverter
                     }
 
                     // ── 새 GO에 SMR 이식 ──
+                    int mappedCount = reboundBones.Count(b => b != null);
+
+                    // 0본 매핑 = 소품(prop): 스켈레톤 바인딩 대신 rootBone에 고정 부착
+                    if (mappedCount == 0)
+                    {
+                        var anchor = reboundRoot ?? avatarRoot.transform;
+                        var propGo = new GameObject($"{groupName}_{smr.name}");
+                        propGo.transform.SetParent(anchor, false);
+                        propGo.transform.localPosition = smr.transform.localPosition;
+                        propGo.transform.localRotation = smr.transform.localRotation;
+                        propGo.transform.localScale    = smr.transform.localScale;
+                        var mr = propGo.AddComponent<MeshRenderer>();
+                        var mf = propGo.AddComponent<MeshFilter>();
+                        mf.sharedMesh      = smr.sharedMesh;
+                        mr.sharedMaterials = smr.sharedMaterials;
+                        Debug.Log($"[WarudoBuild] 소품 부착(MeshRenderer): {smr.name} → {anchor.name}");
+                        count++;
+                        continue;
+                    }
+
                     var newGo  = new GameObject($"{groupName}_{smr.name}");
                     newGo.transform.SetParent(avatarRoot.transform, false);
                     var newSmr = newGo.AddComponent<SkinnedMeshRenderer>();
