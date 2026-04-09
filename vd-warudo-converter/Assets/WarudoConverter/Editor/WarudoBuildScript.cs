@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using Newtonsoft.Json.Linq;
 
 #if WARUDO_SDK
 using UMod.ModTools.Export;
@@ -466,6 +467,8 @@ namespace WarudoConverter
         /// </summary>
         private static void ApplyMatProps(Material mat, MatProps props)
         {
+            bool shaderSwitched = false;
+
             // ── 셰이더 전환 ──
             if (!string.IsNullOrEmpty(props.ShaderName) && props.ShaderName != "Standard")
             {
@@ -473,30 +476,43 @@ namespace WarudoConverter
                 if (shader != null)
                 {
                     mat.shader = shader;
+                    shaderSwitched = true;
                     Debug.Log($"[WarudoBuild] 셰이더 전환: {mat.name} → {props.ShaderName}");
                 }
                 else
                 {
                     Debug.LogWarning($"[WarudoBuild] 셰이더 없음: '{props.ShaderName}' — " +
-                                     "lilToon을 converter 프로젝트에 설치하면 올바르게 렌더링됩니다.");
-                    FixBlackColor(mat, "_Color");
-                    return;  // 셰이더 없으면 색상 적용 불가
+                                     "현재 셰이더로 색상 속성만 적용합니다.");
+                    // ⚠️ return 하지 않음 — 셰이더 전환 실패해도 색상은 반드시 적용
                 }
             }
 
-            // ── Keywords ──
-            if (!string.IsNullOrEmpty(props.Keywords))
+            // ── Keywords (셰이더 전환 성공 시에만) ──
+            if (shaderSwitched && !string.IsNullOrEmpty(props.Keywords))
                 foreach (var kw in props.Keywords.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
                     mat.EnableKeyword(kw);
 
             // ── RenderQueue ──
             if (props.RenderQueue >= 0) mat.renderQueue = props.RenderQueue;
 
-            // ── Colors ──
+            // ── Colors — 셰이더 전환 성공 여부와 무관하게 항상 적용 ──
+            // 사용자가 컬러 피커로 변경한 색상을 .warudo 에도 반영하기 위해 필수
+            bool anyColorApplied = false;
             foreach (var kv in props.Colors)
             {
                 if (mat.HasProperty(kv.Key) && kv.Value?.Length >= 4)
-                    mat.SetColor(kv.Key, new Color(kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]));
+                {
+                    var c = new Color(kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]);
+                    mat.SetColor(kv.Key, c);
+                    anyColorApplied = true;
+                }
+            }
+
+            // 색상이 하나도 적용 안 됐으면 검정 방지 폴백
+            if (!anyColorApplied)
+            {
+                FixBlackColor(mat, "_Color");
+                FixBlackColor(mat, "_BaseColor");
             }
 
             // ── Floats ──
@@ -1068,87 +1084,44 @@ namespace WarudoConverter
         /// </summary>
         private static void ParseMatProperties(string json, Dictionary<string, MatProps> result)
         {
-            var key = "\"matProperties\"";
-            var keyIdx = json.IndexOf(key, StringComparison.Ordinal);
-            if (keyIdx < 0) return;
-
-            // 최상위 { ... } 추출
-            var objOpen = json.IndexOf('{', keyIdx + key.Length);
-            if (objOpen < 0) return;
-            int depth = 0; int objClose = -1;
-            for (int i = objOpen; i < json.Length; i++)
+            try
             {
-                if (json[i] == '{') depth++;
-                else if (json[i] == '}') { depth--; if (depth == 0) { objClose = i; break; } }
+                var root = JObject.Parse(json);
+                var matProps = root["matProperties"] as JObject;
+                if (matProps == null) return;
+
+                foreach (var kv in matProps)
+                {
+                    var matName = kv.Key;
+                    var obj     = kv.Value as JObject;
+                    if (obj == null) continue;
+
+                    var p = new MatProps();
+                    p.ShaderName  = obj["shader"]?.Value<string>() ?? "Standard";
+                    p.Keywords    = obj["keywords"]?.Value<string>() ?? "";
+                    p.RenderQueue = obj["renderQueue"]?.Value<int>() ?? -1;
+
+                    // colors: { "_Color": [r,g,b,a], ... }
+                    if (obj["colors"] is JObject colors)
+                        foreach (var ckv in colors)
+                            if (ckv.Value is JArray arr && arr.Count >= 4)
+                                p.Colors[ckv.Key] = new float[]
+                                {
+                                    arr[0].Value<float>(), arr[1].Value<float>(),
+                                    arr[2].Value<float>(), arr[3].Value<float>()
+                                };
+
+                    // floats: { "_Prop": value, ... }
+                    if (obj["floats"] is JObject floats)
+                        foreach (var fkv in floats)
+                            p.Floats[fkv.Key] = fkv.Value.Value<float>();
+
+                    result[matName] = p;
+                }
             }
-            if (objClose < 0) return;
-
-            // 각 머티리얼 항목: "matName": { ... }
-            var inner = json.Substring(objOpen + 1, objClose - objOpen - 1);
-            var entries = SplitJsonObjects(inner);  // "matName": { ... } 덩어리들
-            foreach (var entry in entries)
+            catch (Exception e)
             {
-                // 머티리얼 이름 추출
-                var nameEnd = entry.IndexOf('"', 1);
-                if (nameEnd < 0) continue;
-                var matName = entry.Substring(1, nameEnd - 1);
-                var entryObj = entry.Substring(entry.IndexOf('{'));
-
-                var p = new MatProps();
-                ParseJsonObject(entryObj, "shader",      (_, v) => p.ShaderName  = v);
-                ParseJsonObject(entryObj, "keywords",    (_, v) => p.Keywords    = v);
-                ParseJsonObject(entryObj, "renderQueue", (_, v) => { if (int.TryParse(v, out var rq)) p.RenderQueue = rq; });
-
-                // colors: { "_Color": [r,g,b,a], ... }
-                var colIdx = entryObj.IndexOf("\"colors\"", StringComparison.Ordinal);
-                if (colIdx >= 0)
-                {
-                    var colOpen  = entryObj.IndexOf('{', colIdx);
-                    var colClose = FindMatchingBrace(entryObj, colOpen, '{', '}');
-                    if (colOpen >= 0 && colClose > colOpen)
-                    {
-                        var colInner = entryObj.Substring(colOpen + 1, colClose - colOpen - 1);
-                        // "_PropName": [r,g,b,a] パターン
-                        var rx = new System.Text.RegularExpressions.Regex(
-                            @"""(_\w+)""\s*:\s*\[([^\]]+)\]");
-                        foreach (System.Text.RegularExpressions.Match m in rx.Matches(colInner))
-                        {
-                            var parts = m.Groups[2].Value.Split(',');
-                            if (parts.Length >= 4)
-                            {
-                                var rgba = new float[4];
-                                for (int i = 0; i < 4; i++)
-                                    float.TryParse(parts[i].Trim(),
-                                        System.Globalization.NumberStyles.Float,
-                                        System.Globalization.CultureInfo.InvariantCulture, out rgba[i]);
-                                p.Colors[m.Groups[1].Value] = rgba;
-                            }
-                        }
-                    }
-                }
-
-                // floats: { "_PropName": value, ... }
-                var fltIdx = entryObj.IndexOf("\"floats\"", StringComparison.Ordinal);
-                if (fltIdx >= 0)
-                {
-                    var fltOpen  = entryObj.IndexOf('{', fltIdx);
-                    var fltClose = FindMatchingBrace(entryObj, fltOpen, '{', '}');
-                    if (fltOpen >= 0 && fltClose > fltOpen)
-                    {
-                        var fltInner = entryObj.Substring(fltOpen + 1, fltClose - fltOpen - 1);
-                        var rx = new System.Text.RegularExpressions.Regex(
-                            @"""(_\w+)""\s*:\s*([\d.eE+-]+)");
-                        foreach (System.Text.RegularExpressions.Match m in rx.Matches(fltInner))
-                        {
-                            if (float.TryParse(m.Groups[2].Value,
-                                System.Globalization.NumberStyles.Float,
-                                System.Globalization.CultureInfo.InvariantCulture, out var fv))
-                                p.Floats[m.Groups[1].Value] = fv;
-                        }
-                    }
-                }
-
-                result[matName] = p;
+                Debug.LogWarning($"[WarudoBuild] matProperties 파싱 실패: {e.Message}");
             }
             Debug.Log($"[WarudoBuild] matProperties 로드: {result.Count}개");
         }
