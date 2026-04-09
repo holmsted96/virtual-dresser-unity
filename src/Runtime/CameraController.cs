@@ -57,17 +57,22 @@ namespace VirtualDresser.Runtime
             _pitch     = Mathf.Asin(offset.y / Mathf.Max(_distance, 0.01f)) * Mathf.Rad2Deg;
         }
 
+        // 마우스 위치가 뷰포트 영역(우측 패널 제외) 안인지 확인
+        private bool InViewport(Vector2 screenPos)
+            => screenPos.x < Screen.width - rightPanelWidth;
+
         private void Update()
         {
             // ── 좌버튼 다운 ──
             if (Input.GetMouseButtonDown(0))
             {
                 _mouseDownPos   = Input.mousePosition;
-                _leftButtonDown = true;
+                // 뷰포트 영역일 때만 카메라 조작 시작
+                _leftButtonDown = InViewport(_mouseDownPos);
                 _isDragging     = false;
             }
 
-            // ── 드래그 여부 판단 ──
+            // ── 드래그 여부 판단 (뷰포트에서 시작한 경우만) ──
             if (_leftButtonDown && !_isDragging)
             {
                 float moved = Vector2.Distance(Input.mousePosition, _mouseDownPos);
@@ -79,11 +84,8 @@ namespace VirtualDresser.Runtime
             if (Input.GetMouseButtonUp(0))
             {
                 if (_leftButtonDown && !_isDragging)
-                {
-                    // UI 패널 영역 클릭 제외 (우측 rightPanelWidth px)
-                    if (_mouseDownPos.x < Screen.width - rightPanelWidth)
-                        HandleMeshClickRaycast(_mouseDownPos);
-                }
+                    HandleMeshClickRaycast(_mouseDownPos);
+
                 _leftButtonDown = false;
                 _isDragging     = false;
             }
@@ -91,7 +93,9 @@ namespace VirtualDresser.Runtime
 
         private void LateUpdate()
         {
-            // ── 좌클릭 드래그: 오빗 ──
+            Vector2 mousePos = Input.mousePosition;
+
+            // ── 좌클릭 드래그: 오빗 (뷰포트에서 시작한 드래그만) ──
             if (_leftButtonDown && _isDragging)
             {
                 _yaw   += Input.GetAxis("Mouse X") * orbitSpeed * Time.deltaTime;
@@ -99,16 +103,19 @@ namespace VirtualDresser.Runtime
                 _pitch  = Mathf.Clamp(_pitch, -60f, 80f);
             }
 
-            // ── 우클릭 드래그: 패닝 ──
-            if (Input.GetMouseButton(1))
+            // ── 우클릭 드래그: 패닝 (뷰포트 위에 있을 때만) ──
+            if (Input.GetMouseButton(1) && InViewport(mousePos))
             {
                 Target -= transform.right * Input.GetAxis("Mouse X") * panSpeed;
                 Target -= transform.up    * Input.GetAxis("Mouse Y") * panSpeed;
             }
 
-            // ── 스크롤: 줌 ──
-            _distance -= Input.GetAxis("Mouse ScrollWheel") * zoomSpeed;
-            _distance  = Mathf.Clamp(_distance, minDistance, maxDistance);
+            // ── 스크롤: 줌 (뷰포트 위에 있을 때만) ──
+            if (InViewport(mousePos))
+            {
+                _distance -= Input.GetAxis("Mouse ScrollWheel") * zoomSpeed;
+                _distance  = Mathf.Clamp(_distance, minDistance, maxDistance);
+            }
 
             // ── 카메라 위치/방향 적용 ──
             var rot = Quaternion.Euler(_pitch, _yaw, 0f);

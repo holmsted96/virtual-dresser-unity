@@ -1885,21 +1885,50 @@ namespace VirtualDresser.UI
                 return;
             }
 
-            // 검색 필터
+            // 검색 + Reset All 행
+            var topRow = new VisualElement();
+            topRow.style.flexDirection = FlexDirection.Row;
+            topRow.style.alignItems    = Align.Center;
+            topRow.style.marginBottom  = 4;
+
             var searchField = new TextField { value = "" };
-            searchField.style.marginBottom = 4;
-            searchField.style.height       = 20;
-            searchField.style.fontSize     = 10;
-            container.Add(searchField);
+            searchField.style.flexGrow  = 1;
+            searchField.style.height    = 20;
+            searchField.style.fontSize  = 10;
+            searchField.style.marginRight = 4;
+
+            // 슬라이더 목록을 나중에 Reset All에서 참조하기 위해 보관
+            var sliderRefs = new List<(Slider slider, Label valLbl, int idx)>();
+
+            var resetAllBtn = new Button(() =>
+            {
+                for (int i = 0; i < mesh.blendShapeCount; i++)
+                    smr.SetBlendShapeWeight(i, 0f);
+                // 현재 표시 중인 슬라이더 UI도 0으로 동기화
+                foreach (var (sl, vl, _) in sliderRefs)
+                {
+                    sl.SetValueWithoutNotify(0f);
+                    vl.text = "0";
+                }
+            }) { text = "Reset All" };
+            resetAllBtn.style.height          = 20;
+            resetAllBtn.style.fontSize        = 9;
+            resetAllBtn.style.backgroundColor = new StyleColor(new Color(0.25f, 0.25f, 0.30f));
+
+            topRow.Add(searchField);
+            topRow.Add(resetAllBtn);
+            container.Add(topRow);
 
             var scroll = new ScrollView(ScrollViewMode.Vertical);
             scroll.style.maxHeight  = 220;
             scroll.style.flexShrink = 1;
             container.Add(scroll);
 
-            void RebuildBsList(string filter)
+            Action<string> rebuildBsList = null;
+            rebuildBsList = filter =>
             {
                 scroll.Clear();
+                sliderRefs.Clear();
                 for (int i = 0; i < mesh.blendShapeCount; i++)
                 {
                     string bsName = mesh.GetBlendShapeName(i);
@@ -1913,24 +1942,39 @@ namespace VirtualDresser.UI
                     row.style.alignItems    = Align.Center;
                     row.style.marginBottom  = 2;
 
-                    var lbl = new Label(bsName.Length > 18 ? bsName.Substring(0, 18) + "…" : bsName);
-                    lbl.style.width    = 90;
+                    var lbl = new Label(bsName.Length > 16 ? bsName.Substring(0, 16) + "…" : bsName);
+                    lbl.style.width    = 82;
                     lbl.style.fontSize = 9;
                     lbl.style.color    = new Color(0.75f, 0.75f, 0.75f);
                     lbl.style.overflow = Overflow.Hidden;
                     lbl.style.whiteSpace = WhiteSpace.NoWrap;
 
-                    float currentWeight = smr.GetBlendShapeWeight(captured);
-                    var slider = new Slider(0f, 100f) { value = currentWeight };
+                    float w = smr.GetBlendShapeWeight(captured);
+                    var slider = new Slider(0f, 100f) { value = w };
                     slider.style.flexGrow    = 1;
                     slider.style.marginLeft  = 4;
                     slider.style.marginRight = 3;
 
-                    var valLbl = new Label(Mathf.RoundToInt(currentWeight).ToString());
-                    valLbl.style.width    = 24;
+                    var valLbl = new Label(Mathf.RoundToInt(w).ToString());
+                    valLbl.style.width    = 22;
                     valLbl.style.fontSize = 9;
                     valLbl.style.color    = new Color(0.6f, 0.6f, 0.6f);
                     valLbl.style.unityTextAlign = TextAnchor.MiddleRight;
+
+                    // 개별 리셋 버튼 (0으로)
+                    var rstBtn = new Button(() =>
+                    {
+                        smr.SetBlendShapeWeight(captured, 0f);
+                        slider.SetValueWithoutNotify(0f);
+                        valLbl.text = "0";
+                    }) { text = "↺" };
+                    rstBtn.style.width    = 18;
+                    rstBtn.style.height   = 16;
+                    rstBtn.style.fontSize = 10;
+                    rstBtn.style.backgroundColor = StyleKeyword.None;
+                    rstBtn.style.color    = new Color(0.45f, 0.45f, 0.45f);
+                    rstBtn.style.borderTopWidth = rstBtn.style.borderBottomWidth =
+                    rstBtn.style.borderLeftWidth = rstBtn.style.borderRightWidth = 0;
 
                     slider.RegisterValueChangedCallback(e =>
                     {
@@ -1938,15 +1982,18 @@ namespace VirtualDresser.UI
                         valLbl.text = Mathf.RoundToInt(e.newValue).ToString();
                     });
 
+                    sliderRefs.Add((slider, valLbl, captured));
+
                     row.Add(lbl);
                     row.Add(slider);
                     row.Add(valLbl);
+                    row.Add(rstBtn);
                     scroll.Add(row);
                 }
-            }
+            };
 
-            RebuildBsList("");
-            searchField.RegisterValueChangedCallback(e => RebuildBsList(e.newValue));
+            rebuildBsList("");
+            searchField.RegisterValueChangedCallback(e => rebuildBsList(e.newValue));
         }
 
         // 컬러 그리드: 12 Hue × 6 Value 행 + 회색 줄
