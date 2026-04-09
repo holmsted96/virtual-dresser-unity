@@ -1437,12 +1437,39 @@ namespace VirtualDresser.UI
         //   Application.dataPath = <exe폴더>/VirtualDresser_Data
         //   → ../vd-warudo-converter = <exe폴더>/vd-warudo-converter  ✓
         // Editor: <project>/Assets → ../../vd-warudo-converter 이지만 Editor에서는 직접 빌드 테스트용
-        public static string ConverterProjectPath =>
+        public static string ConverterProjectPath
+        {
+            get
+            {
 #if UNITY_EDITOR
-            Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "virtual-dresser-unity", "vd-warudo-converter"));
+                // 환경변수 VD_CONVERTER_PATH 설정 시 우선 사용
+                var envPath = System.Environment.GetEnvironmentVariable("VD_CONVERTER_PATH");
+                if (!string.IsNullOrEmpty(envPath)) return envPath;
+
+                // 없으면 git 레포 안의 vd-warudo-converter 탐색
+                // Application.dataPath = c:/vd/virtual-dresser-app/Dresser/Assets
+                // 레포는 별도 위치이므로 상위 드라이브부터 검색
+                var candidates = new[]
+                {
+                    // git 레포가 c:/vd/ 아래 있을 경우 (심볼릭 링크 등)
+                    Path.GetFullPath(Path.Combine(Application.dataPath,
+                        "..", "..", "virtual-dresser-unity", "vd-warudo-converter")),
+                    // OneDrive 표준 경로
+                    Path.Combine(System.Environment.GetFolderPath(
+                        System.Environment.SpecialFolder.UserProfile),
+                        "OneDrive", "업무용PC", "vibe coding",
+                        "virtual Dresser-Unity", "virtual-dresser-unity",
+                        "vd-warudo-converter"),
+                };
+                foreach (var c in candidates)
+                    if (Directory.Exists(c)) return c;
+
+                return candidates[0]; // 없으면 첫 번째 반환 (오류 메시지용)
 #else
-            Path.GetFullPath(Path.Combine(Application.dataPath, "..", "vd-warudo-converter"));
+                return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "vd-warudo-converter"));
 #endif
+            }
+        }
 
         /// <summary>
         /// 헤들리스 Unity 2021.3으로 .warudo 파일 빌드.
