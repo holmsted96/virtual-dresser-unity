@@ -496,7 +496,7 @@ namespace VirtualDresser.UI
                 // 포즈 컨트롤러 초기화
                 if (_poseController == null)
                     _poseController = gameObject.AddComponent<PoseController>();
-                _poseController.SetAvatar(go);
+                _poseController.SetAvatar(go, _currentAvatarConfig);
 
                 HideLoading();
                 SetParseStatus($"Avatar loaded: {displayName}");
@@ -1072,6 +1072,10 @@ namespace VirtualDresser.UI
             if (_hairParse != null)
                 CopyParseAssets(_hairParse, Path.Combine(inputPath, "hair"));
 
+            // 숨김/삭제된 메시 목록을 manifest.json으로 저장
+            // WarudoBuildScript가 읽어서 해당 SMR을 빌드에서 제외함
+            WriteExcludeManifest(inputPath);
+
             // ── 헤들리스 빌드 실행 ──
             // 첫 실행 시 Unity 스크립트 컴파일로 3~5분 소요됨
             bool isFirstRun = !Directory.Exists(
@@ -1102,6 +1106,57 @@ namespace VirtualDresser.UI
                     });
                 });
         }
+
+        /// <summary>
+        /// 앱에서 숨기거나 삭제한 메시 이름 + 실제 머티리얼-텍스처 매핑을 manifest.json에 기록.
+        /// WarudoBuildScript가 읽어서 정확한 텍스처를 머티리얼에 적용.
+        /// </summary>
+        private void WriteExcludeManifest(string inputPath)
+        {
+            // 숨김/삭제된 메시 목록
+            var excluded = _meshGroups
+                .SelectMany(g => g.Entries)
+                .Where(e => e.IsDeleted || !e.IsVisible)
+                .Select(e => e.MeshName)
+                .Distinct()
+                .ToList();
+
+            // 실제 런타임 머티리얼 → 메인 텍스처 파일명 매핑 수집
+            // key: 머티리얼명, value: 텍스처 파일명(확장자 없음)
+            var matTexMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in _meshGroups.SelectMany(g => g.Entries))
+            {
+                if (entry.Renderer == null) continue;
+                foreach (var mat in entry.Renderer.sharedMaterials)
+                {
+                    if (mat == null || matTexMap.ContainsKey(mat.name)) continue;
+                    // _MainTex 우선, 없으면 _BaseMap
+                    Texture2D tex = null;
+                    if (mat.HasProperty("_MainTex"))
+                        tex = mat.GetTexture("_MainTex") as Texture2D;
+                    if (tex == null && mat.HasProperty("_BaseMap"))
+                        tex = mat.GetTexture("_BaseMap") as Texture2D;
+                    if (tex != null)
+                        matTexMap[mat.name] = tex.name;
+                }
+            }
+
+            // JSON 직렬화 (Newtonsoft 없이)
+            var excludedJson = string.Join(",\n", excluded.Select(n => $"    \"{EscapeJson(n)}\""));
+            var matTexJson   = string.Join(",\n", matTexMap.Select(
+                kv => $"    \"{EscapeJson(kv.Key)}\": \"{EscapeJson(kv.Value)}\""));
+
+            var json = "{\n" +
+                       "  \"excludedMeshes\": [\n" + excludedJson + "\n  ],\n" +
+                       "  \"materialTextures\": {\n" + matTexJson + "\n  }\n" +
+                       "}";
+
+            File.WriteAllText(Path.Combine(inputPath, "manifest.json"), json);
+            Debug.Log($"[DresserUI] Export manifest: {excluded.Count}개 제외, {matTexMap.Count}개 머티리얼 매핑");
+        }
+
+        private static string EscapeJson(string s) =>
+            s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
         private static void CopyParseAssets(ParseResult parse, string destDir)
         {
@@ -1174,7 +1229,7 @@ namespace VirtualDresser.UI
             {
                 if (_poseController == null)
                     _poseController = gameObject.AddComponent<PoseController>();
-                _poseController.SetAvatar(_avatarGo);
+                _poseController.SetAvatar(_avatarGo, _currentAvatarConfig);
             }
         }
 
