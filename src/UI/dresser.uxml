@@ -96,9 +96,10 @@
                 style="flex-direction: row;
                        border-bottom-color: rgba(255,255,255,0.07);
                        border-bottom-width: 1px;">
-                <ui:Button name="tab-btn-layer"    text="Layers"   class="tab-btn" />
-                <ui:Button name="tab-btn-mesh"     text="Mesh"     class="tab-btn" />
-                <ui:Button name="tab-btn-material" text="Material" class="tab-btn" />
+                <ui:Button name="tab-btn-layer"      text="Layers"  class="tab-btn" />
+                <ui:Button name="tab-btn-mesh"       text="Mesh"    class="tab-btn" />
+                <ui:Button name="tab-btn-material"   text="Material" class="tab-btn" />
+                <ui:Button name="tab-btn-blendshape" text="Shape"   class="tab-btn" />
             </ui:VisualElement>
 
             <!-- ── 탭 콘텐츠 ── -->
@@ -114,6 +115,8 @@
                 <ui:VisualElement name="material-panel" style="flex: 1; display: none;">
                     <ui:ListView name="material-list" style="flex: 1;" />
                 </ui:VisualElement>
+
+                <ui:VisualElement name="blendshape-panel" style="flex: 1; display: none;" />
 
             </ui:VisualElement>
 

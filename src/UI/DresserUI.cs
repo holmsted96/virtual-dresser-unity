@@ -388,6 +388,8 @@ namespace VirtualDresser.UI
                 ?.RegisterCallback<ClickEvent>(_ => SwitchTab("mesh"));
             _root.Q<Button>("tab-btn-material")
                 ?.RegisterCallback<ClickEvent>(_ => SwitchTab("material"));
+            _root.Q<Button>("tab-btn-blendshape")
+                ?.RegisterCallback<ClickEvent>(_ => { SwitchTab("blendshape"); RefreshBlendShapeTab(); });
 
             // 아바타 카드
             var avatarIds = new[] { "manuka", "moe", "shinano", "shio", "mao", "lumina", "shinra" };
@@ -406,18 +408,20 @@ namespace VirtualDresser.UI
 
         private void SwitchTab(string tabName)
         {
-            SetPanelDisplay("tab-layer",       tabName == "layer");
-            SetPanelDisplay("mesh-panel",      tabName == "mesh");
-            SetPanelDisplay("material-panel",  tabName == "material");
+            SetPanelDisplay("tab-layer",        tabName == "layer");
+            SetPanelDisplay("mesh-panel",       tabName == "mesh");
+            SetPanelDisplay("material-panel",   tabName == "material");
+            SetPanelDisplay("blendshape-panel", tabName == "blendshape");
 
             // 탭 버튼 활성 스타일
-            var tabMap = new[] { ("tab-btn-layer", "layer"), ("tab-btn-mesh", "mesh"), ("tab-btn-material", "material") };
-            foreach (var (btnName, tab) in tabMap)
+            var tabNames  = new[] { "layer", "mesh", "material", "blendshape" };
+            var btnNames  = new[] { "tab-btn-layer", "tab-btn-mesh", "tab-btn-material", "tab-btn-blendshape" };
+            for (int i = 0; i < tabNames.Length; i++)
             {
-                var btn = _root.Q<Button>(btnName);
+                var btn = _root.Q<Button>(btnNames[i]);
                 if (btn == null) continue;
-                if (tab == tabName) btn.AddToClassList("tab-btn--active");
-                else                btn.RemoveFromClassList("tab-btn--active");
+                if (tabNames[i] == tabName) btn.AddToClassList("tab-btn--active");
+                else                        btn.RemoveFromClassList("tab-btn--active");
             }
         }
 
@@ -1790,6 +1794,84 @@ namespace VirtualDresser.UI
             BuildBlendShapePanel(_selectedEntry.Renderer, bsTabContent);
         }
 
+        // ─── BlendShape 탭 (메시 선택과 무관, 항상 전체 목록) ───
+
+        private void RefreshBlendShapeTab()
+        {
+            var panel = _root.Q<VisualElement>("blendshape-panel");
+            if (panel == null) return;
+            panel.Clear();
+
+            // 모든 메시 그룹에서 blendshape 있는 SMR 수집
+            var bsEntries = _meshGroups
+                .SelectMany(g => g.Entries)
+                .Where(e => e.Renderer != null
+                         && e.Renderer.sharedMesh != null
+                         && e.Renderer.sharedMesh.blendShapeCount > 0
+                         && !e.IsDeleted)
+                .ToList();
+
+            if (bsEntries.Count == 0)
+            {
+                var none = new Label("No blendshapes found.\nImport an avatar first.");
+                none.style.fontSize   = 10;
+                none.style.color      = new Color(0.45f, 0.45f, 0.45f);
+                none.style.marginTop  = 10;
+                none.style.whiteSpace = WhiteSpace.Normal;
+                panel.Add(none);
+                return;
+            }
+
+            var scroll = new ScrollView(ScrollViewMode.Vertical);
+            scroll.style.flexGrow = 1;
+            panel.Add(scroll);
+
+            foreach (var entry in bsEntries)
+            {
+                // 메시 그룹 헤더 (접기 가능)
+                var header = new VisualElement();
+                header.style.flexDirection  = FlexDirection.Row;
+                header.style.alignItems     = Align.Center;
+                header.style.marginTop      = 6;
+                header.style.marginBottom   = 2;
+                header.style.borderBottomWidth = 1;
+                header.style.borderBottomColor = new Color(1f, 1f, 1f, 0.07f);
+
+                bool[] expanded = { true };
+                var content = new VisualElement();
+
+                var arrow = new Label("▼");
+                arrow.style.fontSize    = 8;
+                arrow.style.color       = new Color(0.5f, 0.5f, 0.5f);
+                arrow.style.marginRight = 4;
+
+                var meshLbl = new Label(entry.MeshName);
+                meshLbl.style.fontSize = 10;
+                meshLbl.style.color    = new Color(0.85f, 0.85f, 0.85f);
+                meshLbl.style.flexGrow = 1;
+
+                var countLbl = new Label($"{entry.Renderer.sharedMesh.blendShapeCount}");
+                countLbl.style.fontSize = 9;
+                countLbl.style.color    = new Color(0.4f, 0.6f, 0.4f);
+
+                header.Add(arrow);
+                header.Add(meshLbl);
+                header.Add(countLbl);
+
+                header.RegisterCallback<ClickEvent>(_ =>
+                {
+                    expanded[0] = !expanded[0];
+                    content.style.display = expanded[0] ? DisplayStyle.Flex : DisplayStyle.None;
+                    arrow.text = expanded[0] ? "▼" : "▶";
+                });
+
+                scroll.Add(header);
+                scroll.Add(content);
+
+                BuildBlendShapePanel(entry.Renderer, content);
+            }
+        }
+
         private void BuildBlendShapePanel(SkinnedMeshRenderer smr, VisualElement container)
         {
             var mesh = smr.sharedMesh;
@@ -1867,6 +1949,8 @@ namespace VirtualDresser.UI
             searchField.RegisterValueChangedCallback(e => RebuildBsList(e.newValue));
         }
 
+        // 컬러 그리드: 12 Hue × 6 Value 행 + 회색 줄
+        // 전체 스펙트럼을 연속으로 커버하는 시각적 색상 선택기
         private VisualElement BuildMaterialColorRow(Material mat)
         {
             var container = new VisualElement();
@@ -1877,24 +1961,22 @@ namespace VirtualDresser.UI
             container.style.borderBottomLeftRadius  = 4;
             container.style.borderBottomRightRadius = 4;
             container.style.paddingTop    = 5;
-            container.style.paddingBottom = 5;
-            container.style.paddingLeft   = 7;
-            container.style.paddingRight  = 7;
+            container.style.paddingBottom = 6;
+            container.style.paddingLeft   = 6;
+            container.style.paddingRight  = 6;
 
             Color currentColor = GetMatColor(mat);
-            Color.RGBToHSV(currentColor, out float h, out float s, out float v);
-            float a = currentColor.a;
 
-            // ── 헤더: 이름 + 스와치 + 리셋 ──
+            // ── 헤더: 이름 + 현재색 스와치 + 리셋 ──
             var headerRow = new VisualElement();
             headerRow.style.flexDirection = FlexDirection.Row;
             headerRow.style.alignItems    = Align.Center;
             headerRow.style.marginBottom  = 5;
 
             var matLabel = new Label(mat.name.Length > 22 ? mat.name.Substring(0, 22) + "…" : mat.name);
-            matLabel.style.fontSize = 9;
-            matLabel.style.color    = new Color(0.60f, 0.60f, 0.60f);
-            matLabel.style.flexGrow = 1;
+            matLabel.style.fontSize  = 9;
+            matLabel.style.color     = new Color(0.60f, 0.60f, 0.60f);
+            matLabel.style.flexGrow  = 1;
             matLabel.style.overflow  = Overflow.Hidden;
             matLabel.style.whiteSpace = WhiteSpace.NoWrap;
 
@@ -1915,9 +1997,8 @@ namespace VirtualDresser.UI
 
             var resetBtn = new Button(() =>
             {
-                h = 0f; s = 0f; v = 1f; a = 1f;
-                swatch.style.backgroundColor = Color.white;
                 ApplyMatColor(mat, Color.white);
+                swatch.style.backgroundColor = Color.white;
             }) { text = "↺" };
             resetBtn.style.width    = 20;
             resetBtn.style.height   = 16;
@@ -1932,124 +2013,107 @@ namespace VirtualDresser.UI
             headerRow.Add(resetBtn);
             container.Add(headerRow);
 
-            // ── HSV + Alpha 슬라이더 ──
-            // H: 색상(0-360°)  S: 채도(0-100%)  V: 밝기(0-100%)  A: 불투명도(0-100%)
-            string[] chNames  = { "H",   "S",   "V",   "A"   };
-            float[]  chMaxs   = { 360f,  100f,  100f,  100f  };
-            float[]  chInits  = { h * 360f, s * 100f, v * 100f, a * 100f };
-            Color[]  chColors =
-            {
-                new Color(0.8f, 0.5f, 0.2f),
-                new Color(0.3f, 0.7f, 0.5f),
-                new Color(0.7f, 0.7f, 0.7f),
-                new Color(0.5f, 0.5f, 0.65f),
-            };
+            // ── 컬러 그리드 ──
+            // 12 Hue 열(0°~330° 30° 간격) × 6 행(밝기/채도 변화)
+            // + 하단: 흰→회→검 그레이스케일 줄
+            // 셀 크기: 약 22×13px, 총 264×78px (패딩 포함)
 
-            var sliders = new Slider[4];
-            var valLbls = new Label[4];
-            TextField hexField = null;
+            // 행 정의: (V, S) 쌍으로 밝기 단계 표현
+            float[] rowV = { 1.00f, 0.85f, 0.70f, 0.50f, 0.35f, 1.00f };
+            float[] rowS = { 0.55f, 0.85f, 1.00f, 1.00f, 1.00f, 0.30f }; // 마지막 행 = 파스텔
 
-            Action updateFromSliders = null;
-            updateFromSliders = () =>
+            int numHues = 12;
+            float cellW = 22f;
+            float cellH = 13f;
+            float cellGap = 1.5f;
+
+            // 색상 클릭 공통 처리
+            void OnColorPicked(Color c)
             {
-                var c = Color.HSVToRGB(h, s, v);
-                c.a = a;
                 ApplyMatColor(mat, c);
                 swatch.style.backgroundColor = c;
-                if (hexField != null) hexField.SetValueWithoutNotify(ColorToHex(c));
-            };
-
-            for (int ci = 0; ci < 4; ci++)
-            {
-                int idx    = ci;
-                float cMax = chMaxs[ci];
-                string suffix = idx == 0 ? "\u00b0" : "%";  // ° or %
-
-                var row = new VisualElement();
-                row.style.flexDirection = FlexDirection.Row;
-                row.style.alignItems    = Align.Center;
-                row.style.marginBottom  = 2;
-
-                var lbl = new Label(chNames[idx]);
-                lbl.style.width    = 12;
-                lbl.style.fontSize = 9;
-                lbl.style.color    = new StyleColor(chColors[idx]);
-
-                var slider = new Slider(0f, cMax) { value = chInits[idx] };
-                slider.style.flexGrow    = 1;
-                slider.style.marginLeft  = 4;
-                slider.style.marginRight = 3;
-                sliders[idx] = slider;
-
-                var valLbl = new Label(Mathf.RoundToInt(chInits[idx]) + suffix);
-                valLbl.style.width    = 30;
-                valLbl.style.fontSize = 9;
-                valLbl.style.color    = new Color(0.6f, 0.6f, 0.6f);
-                valLbl.style.unityTextAlign = TextAnchor.MiddleRight;
-                valLbls[idx] = valLbl;
-
-                slider.RegisterValueChangedCallback(e =>
-                {
-                    float norm = e.newValue / cMax;
-                    if (idx == 0) h = norm;
-                    else if (idx == 1) s = norm;
-                    else if (idx == 2) v = norm;
-                    else              a = norm;
-                    valLbl.text = Mathf.RoundToInt(e.newValue) + suffix;
-                    updateFromSliders?.Invoke();
-                });
-
-                row.Add(lbl);
-                row.Add(slider);
-                row.Add(valLbl);
-                container.Add(row);
+                // hex 필드 동기화
+                hexInputRef[0]?.SetValueWithoutNotify(ColorToHex(c));
             }
 
+            VisualElement MakeCell(Color c)
+            {
+                var cell = new VisualElement();
+                cell.style.width  = cellW;
+                cell.style.height = cellH;
+                cell.style.marginTop = cell.style.marginBottom =
+                cell.style.marginLeft = cell.style.marginRight = cellGap * 0.5f;
+                cell.style.backgroundColor = c;
+                cell.style.borderTopLeftRadius = cell.style.borderTopRightRadius =
+                cell.style.borderBottomLeftRadius = cell.style.borderBottomRightRadius = 2;
+
+                var captured = c;
+                cell.RegisterCallback<MouseEnterEvent>(_ =>
+                {
+                    cell.style.borderTopWidth = cell.style.borderBottomWidth =
+                    cell.style.borderLeftWidth = cell.style.borderRightWidth = 1.5f;
+                    cell.style.borderTopColor = cell.style.borderBottomColor =
+                    cell.style.borderLeftColor = cell.style.borderRightColor = Color.white;
+                });
+                cell.RegisterCallback<MouseLeaveEvent>(_ =>
+                {
+                    cell.style.borderTopWidth = cell.style.borderBottomWidth =
+                    cell.style.borderLeftWidth = cell.style.borderRightWidth = 0;
+                });
+                cell.RegisterCallback<ClickEvent>(_ => OnColorPicked(captured));
+                return cell;
+            }
+
+            // 각 행 렌더
+            for (int row = 0; row < rowV.Length; row++)
+            {
+                var rowEl = new VisualElement();
+                rowEl.style.flexDirection = FlexDirection.Row;
+                for (int col = 0; col < numHues; col++)
+                {
+                    float hue = col / (float)numHues;
+                    Color c = Color.HSVToRGB(hue, rowS[row], rowV[row]);
+                    rowEl.Add(MakeCell(c));
+                }
+                container.Add(rowEl);
+            }
+
+            // 그레이스케일 줄 (흰→검 12단계)
+            var grayRow = new VisualElement();
+            grayRow.style.flexDirection = FlexDirection.Row;
+            grayRow.style.marginTop     = 2;
+            for (int gi = 0; gi < numHues; gi++)
+            {
+                float t = 1f - gi / (float)(numHues - 1);
+                grayRow.Add(MakeCell(new Color(t, t, t, 1f)));
+            }
+            container.Add(grayRow);
+
             // ── Hex 입력 ──
+            TextField[] hexInputRef = { null };  // 클로저 참조용
+
             var hexRow = new VisualElement();
             hexRow.style.flexDirection = FlexDirection.Row;
             hexRow.style.alignItems    = Align.Center;
-            hexRow.style.marginTop     = 3;
+            hexRow.style.marginTop     = 5;
 
             var hashLbl = new Label("#");
-            hashLbl.style.fontSize   = 9;
-            hashLbl.style.color      = new Color(0.4f, 0.4f, 0.4f);
+            hashLbl.style.fontSize    = 9;
+            hashLbl.style.color       = new Color(0.4f, 0.4f, 0.4f);
             hashLbl.style.marginRight = 2;
 
-            hexField = new TextField { value = ColorToHex(currentColor) };
+            var hexField = new TextField { value = ColorToHex(currentColor) };
             hexField.style.flexGrow  = 1;
             hexField.style.fontSize  = 9;
             hexField.style.height    = 18;
+            hexInputRef[0] = hexField;
 
             hexField.RegisterValueChangedCallback(e =>
             {
                 if (!TryParseHex(e.newValue, out Color parsed)) return;
-                Color.RGBToHSV(parsed, out h, out s, out v);
-                a = parsed.a;
-                // 슬라이더 위치 동기화
-                sliders[0].SetValueWithoutNotify(h * 360f);
-                sliders[1].SetValueWithoutNotify(s * 100f);
-                sliders[2].SetValueWithoutNotify(v * 100f);
-                sliders[3].SetValueWithoutNotify(a * 100f);
-                valLbls[0].text = Mathf.RoundToInt(h * 360f) + "°";
-                valLbls[1].text = Mathf.RoundToInt(s * 100f) + "%";
-                valLbls[2].text = Mathf.RoundToInt(v * 100f) + "%";
-                valLbls[3].text = Mathf.RoundToInt(a * 100f) + "%";
                 ApplyMatColor(mat, parsed);
                 swatch.style.backgroundColor = parsed;
             });
-
-            // Reset도 슬라이더 동기화
-            resetBtn.clicked += () =>
-            {
-                sliders[0].SetValueWithoutNotify(0f);
-                sliders[1].SetValueWithoutNotify(0f);
-                sliders[2].SetValueWithoutNotify(100f);
-                sliders[3].SetValueWithoutNotify(100f);
-                valLbls[0].text = "0°"; valLbls[1].text = "0%";
-                valLbls[2].text = "100%"; valLbls[3].text = "100%";
-                hexField.SetValueWithoutNotify("FFFFFF");
-            };
 
             hexRow.Add(hashLbl);
             hexRow.Add(hexField);

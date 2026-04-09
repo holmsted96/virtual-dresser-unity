@@ -23,7 +23,7 @@ namespace VirtualDresser.Runtime
 
         [Header("아웃라인")]
         [SerializeField] private Color outlineColor = new Color(0.2f, 0.7f, 1f, 1f);
-        [SerializeField] [Range(0f, 0.05f)] private float outlineWidth = 0.007f;
+        [SerializeField] [Range(0f, 0.02f)] private float outlineWidth = 0.003f;
 
         // ─── 내부 상태 ───
         private SkinnedMeshRenderer _selected;
