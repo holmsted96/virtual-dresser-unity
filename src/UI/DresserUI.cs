@@ -2023,20 +2023,23 @@ namespace VirtualDresser.UI
             float[] rowS = { 0.55f, 0.85f, 1.00f, 1.00f, 1.00f, 0.30f }; // 마지막 행 = 파스텔
 
             int numHues = 12;
-            float cellW = 22f;
-            float cellH = 13f;
+            float cellW   = 22f;
+            float cellH   = 13f;
             float cellGap = 1.5f;
 
-            // 색상 클릭 공통 처리
-            void OnColorPicked(Color c)
-            {
-                ApplyMatColor(mat, c);
-                swatch.style.backgroundColor = c;
-                // hex 필드 동기화
-                hexInputRef[0]?.SetValueWithoutNotify(ColorToHex(c));
-            }
+            // hexField를 그리드보다 먼저 선언 (로컬 함수 클로저에서 참조)
+            TextField hexField = null;
 
-            VisualElement MakeCell(Color c)
+            // 색상 선택 공통 처리
+            Action<Color> onColorPicked = picked =>
+            {
+                ApplyMatColor(mat, picked);
+                swatch.style.backgroundColor = picked;
+                hexField?.SetValueWithoutNotify(ColorToHex(picked));
+            };
+
+            // 컬러 셀 생성
+            Action<VisualElement, Color> addCell = (parent, c) =>
             {
                 var cell = new VisualElement();
                 cell.style.width  = cellW;
@@ -2047,7 +2050,7 @@ namespace VirtualDresser.UI
                 cell.style.borderTopLeftRadius = cell.style.borderTopRightRadius =
                 cell.style.borderBottomLeftRadius = cell.style.borderBottomRightRadius = 2;
 
-                var captured = c;
+                var cap = c;
                 cell.RegisterCallback<MouseEnterEvent>(_ =>
                 {
                     cell.style.borderTopWidth = cell.style.borderBottomWidth =
@@ -2060,38 +2063,35 @@ namespace VirtualDresser.UI
                     cell.style.borderTopWidth = cell.style.borderBottomWidth =
                     cell.style.borderLeftWidth = cell.style.borderRightWidth = 0;
                 });
-                cell.RegisterCallback<ClickEvent>(_ => OnColorPicked(captured));
-                return cell;
-            }
+                cell.RegisterCallback<ClickEvent>(_ => onColorPicked(cap));
+                parent.Add(cell);
+            };
 
-            // 각 행 렌더
-            for (int row = 0; row < rowV.Length; row++)
+            // 각 행 렌더 (Hue 12 × Value/Saturation 6)
+            for (int ri = 0; ri < rowV.Length; ri++)
             {
                 var rowEl = new VisualElement();
                 rowEl.style.flexDirection = FlexDirection.Row;
                 for (int col = 0; col < numHues; col++)
                 {
                     float hue = col / (float)numHues;
-                    Color c = Color.HSVToRGB(hue, rowS[row], rowV[row]);
-                    rowEl.Add(MakeCell(c));
+                    addCell(rowEl, Color.HSVToRGB(hue, rowS[ri], rowV[ri]));
                 }
                 container.Add(rowEl);
             }
 
             // 그레이스케일 줄 (흰→검 12단계)
-            var grayRow = new VisualElement();
-            grayRow.style.flexDirection = FlexDirection.Row;
-            grayRow.style.marginTop     = 2;
+            var grayRowEl = new VisualElement();
+            grayRowEl.style.flexDirection = FlexDirection.Row;
+            grayRowEl.style.marginTop     = 2;
             for (int gi = 0; gi < numHues; gi++)
             {
                 float t = 1f - gi / (float)(numHues - 1);
-                grayRow.Add(MakeCell(new Color(t, t, t, 1f)));
+                addCell(grayRowEl, new Color(t, t, t, 1f));
             }
-            container.Add(grayRow);
+            container.Add(grayRowEl);
 
             // ── Hex 입력 ──
-            TextField[] hexInputRef = { null };  // 클로저 참조용
-
             var hexRow = new VisualElement();
             hexRow.style.flexDirection = FlexDirection.Row;
             hexRow.style.alignItems    = Align.Center;
@@ -2102,11 +2102,10 @@ namespace VirtualDresser.UI
             hashLbl.style.color       = new Color(0.4f, 0.4f, 0.4f);
             hashLbl.style.marginRight = 2;
 
-            var hexField = new TextField { value = ColorToHex(currentColor) };
+            hexField = new TextField { value = ColorToHex(currentColor) };
             hexField.style.flexGrow  = 1;
             hexField.style.fontSize  = 9;
             hexField.style.height    = 18;
-            hexInputRef[0] = hexField;
 
             hexField.RegisterValueChangedCallback(e =>
             {
