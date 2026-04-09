@@ -225,9 +225,8 @@ namespace VirtualDresser.Runtime
                     // lilToon 없으면 TriLib이 설정한 셰이더 그대로 사용
                     // (교체 시 Standalone에서 셰이더 strip으로 메시 완전 비가시 발생)
 
-                    // 어떤 셰이더든 _Color / _BaseColor 흰색 보장
-                    if (mat.HasProperty("_Color"))    mat.SetColor("_Color",    Color.white);
-                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+                    // _Color 기본값: .mat에서 읽은 값으로 덮어씌워지므로 여기선 보장만
+                    // (InitLilToonDefaults에서 이미 white 초기화됨)
 
                     // 매칭 키 결정 (우선순위 순)
                     var rawKey   = !string.IsNullOrEmpty(mat.name) ? mat.name : smr.name;
@@ -325,6 +324,9 @@ namespace VirtualDresser.Runtime
                 if (matInfo.EmissionMap != null && textures.TryGetValue(matInfo.EmissionMap, out var e))
                     mat.SetTexture("_EmissionMap", e);
 
+                // ── .mat 프로퍼티 전체 적용 (Colors / Floats / Keywords / RenderQueue) ──
+                ApplyMatProperties(mat, matInfo);
+
                 if (!applied)
                     Debug.LogWarning($"[MatMgr] .mat 있으나 텍스처 미적용: '{matchKey}' / MainTex={matInfo.MainTex}");
                 return applied;
@@ -370,6 +372,38 @@ namespace VirtualDresser.Runtime
         /// MaterialTextureMap에서 matchKey를 찾되, 없으면 prefix 제거 후 재시도.
         /// FBX 머티리얼 이름(TriLib) ≠ .mat 파일명인 경우 대응.
         /// </summary>
+        /// <summary>
+        /// .mat 파일에서 파싱한 Colors/Floats/Keywords/RenderQueue를 머티리얼에 적용.
+        /// InitLilToonDefaults 이후에 호출되므로 원본 값이 기본값을 올바르게 덮어씀.
+        /// </summary>
+        private static void ApplyMatProperties(Material mat, MaterialTextures info)
+        {
+            // Colors — _Color, _OutlineColor, _ShadowColor 등
+            foreach (var kv in info.Colors)
+            {
+                if (mat.HasProperty(kv.Key))
+                    mat.SetColor(kv.Key, kv.Value);
+            }
+
+            // Floats — _OutlineWidth, _LightMinLimit, _Cutoff, _TransparentMode 등
+            foreach (var kv in info.Floats)
+            {
+                if (mat.HasProperty(kv.Key))
+                    mat.SetFloat(kv.Key, kv.Value);
+            }
+
+            // ShaderKeywords
+            if (!string.IsNullOrEmpty(info.Keywords))
+            {
+                foreach (var kw in info.Keywords.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                    mat.EnableKeyword(kw);
+            }
+
+            // RenderQueue
+            if (info.RenderQueue >= 0)
+                mat.renderQueue = info.RenderQueue;
+        }
+
         private static MaterialTextures FindMatInfo(
             Dictionary<string, MaterialTextures> map, string matchKey)
         {

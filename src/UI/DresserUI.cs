@@ -1333,6 +1333,9 @@ namespace VirtualDresser.UI
                 }
             }
 
+            // ── 머티리얼 셰이더 + 속성 전체 (WarudoBuildScript가 lilToon으로 전환 + 적용) ──
+            var matPropsJson = BuildMatPropertiesJson();
+
             // ── JSON 조합 ──
             var excludedJson = string.Join(",\n", excluded.Select(n => $"    \"{EscapeJson(n)}\""));
             var matTexJson   = string.Join(",\n", matTexMap.Select(
@@ -1342,12 +1345,91 @@ namespace VirtualDresser.UI
             var json = "{\n" +
                        "  \"excludedMeshes\": [\n" + excludedJson + "\n  ],\n" +
                        "  \"materialTextures\": {\n" + matTexJson + "\n  },\n" +
+                       "  \"matProperties\": " + matPropsJson + ",\n" +
                        "  \"smrBindings\": [\n" + bindingsJson + "\n  ]\n" +
                        "}";
 
             File.WriteAllText(Path.Combine(inputPath, "manifest.json"), json);
             Debug.Log($"[DresserUI] manifest: 제외 {excluded.Count}개, 머티리얼 {matTexMap.Count}개, SMR {smrBindings.Count}개");
         }
+
+        // lilToon에서 WarudoBuildScript로 전달할 프로퍼티 목록
+        // 색감/렌더링에 직접 영향을 주는 핵심 속성만 선택
+        private static readonly string[] s_ExportColorProps = {
+            "_Color", "_Color2nd", "_Color3rd", "_MainColor",
+            "_OutlineColor", "_EmissionColor",
+            "_1stShadowColor", "_2ndShadowColor",
+            "_BacklightColor", "_RimColor",
+        };
+        private static readonly string[] s_ExportFloatProps = {
+            "_TransparentMode", "_Cutoff", "_AlphaToMask",
+            "_OutlineEnable", "_OutlineWidth",
+            "_LightMinLimit", "_LightMaxLimit",
+            "_MonochromeLighting", "_ShadowEnvStrength",
+            "_ZWrite",
+        };
+
+        /// <summary>
+        /// 현재 씬에 로드된 모든 머티리얼의 셰이더명 + 핵심 속성을 JSON 문자열로 반환.
+        /// WarudoBuildScript가 converter 프로젝트에서 lilToon으로 전환 후 속성을 적용.
+        /// </summary>
+        private string BuildMatPropertiesJson()
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = new List<string>();
+
+            foreach (var entry in _meshGroups.SelectMany(g => g.Entries))
+            {
+                if (entry.Renderer == null) continue;
+                foreach (var mat in entry.Renderer.sharedMaterials)
+                {
+                    if (mat == null || !seen.Add(mat.name)) continue;
+
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append($"    \"{EscapeJson(mat.name)}\": {{\n");
+                    sb.Append($"      \"shader\": \"{EscapeJson(mat.shader?.name ?? "Standard")}\",\n");
+                    sb.Append($"      \"renderQueue\": {mat.renderQueue},\n");
+
+                    // keywords
+                    var kws = mat.shaderKeywords != null
+                        ? string.Join(" ", mat.shaderKeywords)
+                        : "";
+                    sb.Append($"      \"keywords\": \"{EscapeJson(kws)}\",\n");
+
+                    // colors
+                    var colorParts = new List<string>();
+                    foreach (var prop in s_ExportColorProps)
+                    {
+                        if (!mat.HasProperty(prop)) continue;
+                        var c = mat.GetColor(prop);
+                        colorParts.Add($"        \"{prop}\": [{FmtF(c.r)},{FmtF(c.g)},{FmtF(c.b)},{FmtF(c.a)}]");
+                    }
+                    sb.Append("      \"colors\": {\n");
+                    sb.Append(string.Join(",\n", colorParts));
+                    sb.Append("\n      },\n");
+
+                    // floats
+                    var floatParts = new List<string>();
+                    foreach (var prop in s_ExportFloatProps)
+                    {
+                        if (!mat.HasProperty(prop)) continue;
+                        var v = mat.GetFloat(prop);
+                        floatParts.Add($"        \"{prop}\": {FmtF(v)}");
+                    }
+                    sb.Append("      \"floats\": {\n");
+                    sb.Append(string.Join(",\n", floatParts));
+                    sb.Append("\n      }\n");
+
+                    sb.Append("    }");
+                    entries.Add(sb.ToString());
+                }
+            }
+
+            return "{\n" + string.Join(",\n", entries) + "\n  }";
+        }
+
+        private static string FmtF(float v) =>
+            v.ToString("G6", System.Globalization.CultureInfo.InvariantCulture);
 
         /// <summary>
         /// .prefab에서 파싱한 PrefabSmrDataList를 게임오브젝트의 SMR에 적용.

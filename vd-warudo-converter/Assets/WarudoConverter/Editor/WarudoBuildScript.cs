@@ -52,8 +52,8 @@ namespace WarudoConverter
         private static void RunBuild(string inputPath, string outputPath, string avatarName)
         {
             // manifest.json 읽기
-            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var smrBindings);
-            Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, SMR바인딩: {smrBindings.Count}개");
+            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var matProps, out var smrBindings);
+            Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, matProps: {matProps.Count}개, SMR바인딩: {smrBindings.Count}개");
 
             var importRoot  = $"Assets/VDImport_{avatarName}";
             var avatarDir   = $"{importRoot}/Avatar";
@@ -117,7 +117,7 @@ namespace WarudoConverter
 
             // ── [5] 텍스처 → 머티리얼 할당 ──
             var texByName = BuildTexByName(importRoot);
-            AssignTexturesToMaterials(importRoot, matTexMap, smrBindings, texByName);
+            AssignTexturesToMaterials(importRoot, matTexMap, matProps, smrBindings, texByName);
             // ★ AssignTexturesToMaterials가 SetDirty+SaveAssets 했으므로
             //   AssetDatabase를 강제 동기화해 FBX 프리팹이 최신 .mat를 참조하도록 함
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
@@ -298,6 +298,7 @@ namespace WarudoConverter
         private static void AssignTexturesToMaterials(
             string importRoot,
             Dictionary<string, string> matTexMap,
+            Dictionary<string, MatProps> matProps,
             List<SmrBinding> smrBindings,
             Dictionary<string, string> texByName)
         {
@@ -368,9 +369,15 @@ namespace WarudoConverter
 
                 if (mat.HasProperty("_MainTex"))   mat.SetTexture("_MainTex", tex);
                 if (mat.HasProperty("_BaseMap"))   mat.SetTexture("_BaseMap",  tex);
-                // _Color가 거의 검정(기본값 미설정)일 때만 white로 교정 — 의도된 tint는 유지
-                FixBlackColor(mat, "_Color");
-                FixBlackColor(mat, "_BaseColor");
+
+                // matProps에서 셰이더 + 속성 적용 (DresserUI에서 실제 적용된 값)
+                if (matProps.TryGetValue(mat.name, out var props))
+                    ApplyMatProps(mat, props);
+                else
+                {
+                    FixBlackColor(mat, "_Color");
+                    FixBlackColor(mat, "_BaseColor");
+                }
 
                 EditorUtility.SetDirty(mat);
                 assigned++;
@@ -433,8 +440,6 @@ namespace WarudoConverter
 
         /// <summary>
         /// 머티리얼의 색상 프로퍼티가 거의 검정(rgba 모두 0.05 미만)인 경우에만 white로 교정.
-        /// FBX 임포트 기본값이 검정인 경우 텍스처가 안 보이는 문제 방지.
-        /// 의도된 tint 색상(피부색, 머리색 등)은 그대로 유지.
         /// </summary>
         private static void FixBlackColor(Material mat, string prop)
         {
@@ -442,6 +447,62 @@ namespace WarudoConverter
             var c = mat.GetColor(prop);
             if (c.r < 0.05f && c.g < 0.05f && c.b < 0.05f)
                 mat.SetColor(prop, Color.white);
+        }
+
+        // ── DresserUI에서 export된 머티리얼 속성 ──
+
+        public class MatProps
+        {
+            public string ShaderName   = "Standard";
+            public int    RenderQueue  = -1;
+            public string Keywords     = "";
+            public Dictionary<string, float[]> Colors = new();  // RGBA float[4]
+            public Dictionary<string, float>   Floats = new();
+        }
+
+        /// <summary>
+        /// DresserUI manifest의 matProperties를 머티리얼에 적용.
+        /// 셰이더를 lilToon으로 전환하고, 색상/float 속성을 원본 그대로 복원.
+        /// </summary>
+        private static void ApplyMatProps(Material mat, MatProps props)
+        {
+            // ── 셰이더 전환 ──
+            if (!string.IsNullOrEmpty(props.ShaderName) && props.ShaderName != "Standard")
+            {
+                var shader = Shader.Find(props.ShaderName);
+                if (shader != null)
+                {
+                    mat.shader = shader;
+                    Debug.Log($"[WarudoBuild] 셰이더 전환: {mat.name} → {props.ShaderName}");
+                }
+                else
+                {
+                    Debug.LogWarning($"[WarudoBuild] 셰이더 없음: '{props.ShaderName}' — " +
+                                     "lilToon을 converter 프로젝트에 설치하면 올바르게 렌더링됩니다.");
+                    FixBlackColor(mat, "_Color");
+                    return;  // 셰이더 없으면 색상 적용 불가
+                }
+            }
+
+            // ── Keywords ──
+            if (!string.IsNullOrEmpty(props.Keywords))
+                foreach (var kw in props.Keywords.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                    mat.EnableKeyword(kw);
+
+            // ── RenderQueue ──
+            if (props.RenderQueue >= 0) mat.renderQueue = props.RenderQueue;
+
+            // ── Colors ──
+            foreach (var kv in props.Colors)
+            {
+                if (mat.HasProperty(kv.Key) && kv.Value?.Length >= 4)
+                    mat.SetColor(kv.Key, new Color(kv.Value[0], kv.Value[1], kv.Value[2], kv.Value[3]));
+            }
+
+            // ── Floats ──
+            foreach (var kv in props.Floats)
+                if (mat.HasProperty(kv.Key))
+                    mat.SetFloat(kv.Key, kv.Value);
         }
 
         // ──────────────────────────────────────────────────────
@@ -602,11 +663,12 @@ namespace WarudoConverter
                     mat.shader = src.shader;
                 }
 
-                // 원본 속성 복사 후 텍스처만 덮어쓰기 — 색상(tint)은 원본 유지
+                // 원본 속성 복사 후 텍스처 덮어쓰기
                 mat.CopyPropertiesFromMaterial(src);
                 if (mat.HasProperty("_MainTex"))   mat.SetTexture("_MainTex",  tex);
                 if (mat.HasProperty("_BaseMap"))   mat.SetTexture("_BaseMap",  tex);
-                // _Color가 거의 검정(기본값 미설정)일 때만 white로 교정
+                // matProps에서 셰이더 + 속성 적용 (DresserUI에서 실제 적용된 값)
+                // ApplySlotTextures는 외부에서 matProps에 접근 못하므로 src mat 이름 기반으로 처리
                 FixBlackColor(mat, "_Color");
                 FixBlackColor(mat, "_BaseColor");
                 EditorUtility.SetDirty(mat);
@@ -928,14 +990,17 @@ namespace WarudoConverter
             string inputPath,
             out HashSet<string> excludedMeshes,
             out Dictionary<string, string> matTexMap,
+            out Dictionary<string, MatProps> matProps,
             out List<SmrBinding> smrBindings)
         {
             var ex  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var mtm = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var mp  = new Dictionary<string, MatProps>(StringComparer.OrdinalIgnoreCase);
             var sb  = new List<SmrBinding>();
 
             excludedMeshes = ex;
             matTexMap      = mtm;
+            matProps       = mp;
             smrBindings    = sb;
 
             var manifestPath = Path.Combine(inputPath, "manifest.json");
@@ -955,6 +1020,9 @@ namespace WarudoConverter
             {
                 if (!string.IsNullOrEmpty(k)) mtm[k] = v;
             });
+
+            // ── matProperties: 머티리얼별 셰이더/속성 ──
+            ParseMatProperties(json, mp);
 
             // ── smrBindings: JSON 배열 내 각 객체를 파싱 ──
             var sbStart = json.IndexOf("\"smrBindings\"", StringComparison.Ordinal);
@@ -993,6 +1061,107 @@ namespace WarudoConverter
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// manifest.json의 "matProperties" 섹션을 파싱해 MatProps 딕셔너리에 저장.
+        /// </summary>
+        private static void ParseMatProperties(string json, Dictionary<string, MatProps> result)
+        {
+            var key = "\"matProperties\"";
+            var keyIdx = json.IndexOf(key, StringComparison.Ordinal);
+            if (keyIdx < 0) return;
+
+            // 최상위 { ... } 추출
+            var objOpen = json.IndexOf('{', keyIdx + key.Length);
+            if (objOpen < 0) return;
+            int depth = 0; int objClose = -1;
+            for (int i = objOpen; i < json.Length; i++)
+            {
+                if (json[i] == '{') depth++;
+                else if (json[i] == '}') { depth--; if (depth == 0) { objClose = i; break; } }
+            }
+            if (objClose < 0) return;
+
+            // 각 머티리얼 항목: "matName": { ... }
+            var inner = json.Substring(objOpen + 1, objClose - objOpen - 1);
+            var entries = SplitJsonObjects(inner);  // "matName": { ... } 덩어리들
+            foreach (var entry in entries)
+            {
+                // 머티리얼 이름 추출
+                var nameEnd = entry.IndexOf('"', 1);
+                if (nameEnd < 0) continue;
+                var matName = entry.Substring(1, nameEnd - 1);
+                var entryObj = entry.Substring(entry.IndexOf('{'));
+
+                var p = new MatProps();
+                ParseJsonObject(entryObj, "shader",      (_, v) => p.ShaderName  = v);
+                ParseJsonObject(entryObj, "keywords",    (_, v) => p.Keywords    = v);
+                ParseJsonObject(entryObj, "renderQueue", (_, v) => { if (int.TryParse(v, out var rq)) p.RenderQueue = rq; });
+
+                // colors: { "_Color": [r,g,b,a], ... }
+                var colIdx = entryObj.IndexOf("\"colors\"", StringComparison.Ordinal);
+                if (colIdx >= 0)
+                {
+                    var colOpen  = entryObj.IndexOf('{', colIdx);
+                    var colClose = FindMatchingBrace(entryObj, colOpen, '{', '}');
+                    if (colOpen >= 0 && colClose > colOpen)
+                    {
+                        var colInner = entryObj.Substring(colOpen + 1, colClose - colOpen - 1);
+                        // "_PropName": [r,g,b,a] パターン
+                        var rx = new System.Text.RegularExpressions.Regex(
+                            @"""(_\w+)""\s*:\s*\[([^\]]+)\]");
+                        foreach (System.Text.RegularExpressions.Match m in rx.Matches(colInner))
+                        {
+                            var parts = m.Groups[2].Value.Split(',');
+                            if (parts.Length >= 4)
+                            {
+                                var rgba = new float[4];
+                                for (int i = 0; i < 4; i++)
+                                    float.TryParse(parts[i].Trim(),
+                                        System.Globalization.NumberStyles.Float,
+                                        System.Globalization.CultureInfo.InvariantCulture, out rgba[i]);
+                                p.Colors[m.Groups[1].Value] = rgba;
+                            }
+                        }
+                    }
+                }
+
+                // floats: { "_PropName": value, ... }
+                var fltIdx = entryObj.IndexOf("\"floats\"", StringComparison.Ordinal);
+                if (fltIdx >= 0)
+                {
+                    var fltOpen  = entryObj.IndexOf('{', fltIdx);
+                    var fltClose = FindMatchingBrace(entryObj, fltOpen, '{', '}');
+                    if (fltOpen >= 0 && fltClose > fltOpen)
+                    {
+                        var fltInner = entryObj.Substring(fltOpen + 1, fltClose - fltOpen - 1);
+                        var rx = new System.Text.RegularExpressions.Regex(
+                            @"""(_\w+)""\s*:\s*([\d.eE+-]+)");
+                        foreach (System.Text.RegularExpressions.Match m in rx.Matches(fltInner))
+                        {
+                            if (float.TryParse(m.Groups[2].Value,
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var fv))
+                                p.Floats[m.Groups[1].Value] = fv;
+                        }
+                    }
+                }
+
+                result[matName] = p;
+            }
+            Debug.Log($"[WarudoBuild] matProperties 로드: {result.Count}개");
+        }
+
+        private static int FindMatchingBrace(string s, int open, char openChar, char closeChar)
+        {
+            int depth = 0;
+            for (int i = open; i < s.Length; i++)
+            {
+                if (s[i] == openChar) depth++;
+                else if (s[i] == closeChar) { depth--; if (depth == 0) return i; }
+            }
+            return -1;
         }
 
         // ── 간단한 JSON 파싱 헬퍼 ──

@@ -77,6 +77,12 @@ namespace VirtualDresser.Runtime
         public string MainTex;
         public string BumpMap;
         public string EmissionMap;
+
+        // lilToon / Standard 셰이더 프로퍼티 전체 — .mat 파일에서 직접 읽음
+        public Dictionary<string, Color>  Colors   = new();   // m_Colors 섹션
+        public Dictionary<string, float>  Floats   = new();   // m_Floats 섹션
+        public string                     Keywords = "";      // m_ShaderKeywords
+        public int                        RenderQueue = -1;   // m_CustomRenderQueue (-1=미설정)
     }
 
     /// <summary>
@@ -211,10 +217,27 @@ namespace VirtualDresser.Runtime
                     Debug.Log($"[Parser] .prefab 읽기: {pathname} ({prefabText.Length}자)");
 
                     // 진단: m_BlendShapeWeights 포함 여부 확인
+                    // hasWeightsSparse: PrefabInstance 블록 안에서만 체크 (MonoBehaviour 오탐 방지)
                     bool hasWeightsDense  = prefabText.Contains("m_BlendShapeWeights:");
-                    bool hasWeightsSparse = prefabText.Contains("m_BlendShapeWeights.Array.data[");
                     bool hasSMR           = prefabText.Contains("!u!137");
                     bool hasPrefabInst    = prefabText.Contains("!u!1001");
+                    // PrefabInstance 내부에서만 sparse 패턴 검색
+                    bool hasWeightsSparse = false;
+                    if (hasPrefabInst)
+                    {
+                        int instIdx = 0;
+                        while ((instIdx = prefabText.IndexOf("!u!1001 &", instIdx)) >= 0)
+                        {
+                            int nextBlock = prefabText.IndexOf("\n---", instIdx + 1);
+                            int end = nextBlock < 0 ? prefabText.Length : nextBlock;
+                            if (prefabText.IndexOf("m_BlendShapeWeights.Array.data[", instIdx, end - instIdx) >= 0)
+                            {
+                                hasWeightsSparse = true;
+                                break;
+                            }
+                            instIdx++;
+                        }
+                    }
                     Debug.Log($"[Parser] .prefab 분석: hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
                               $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
 
@@ -233,11 +256,16 @@ namespace VirtualDresser.Runtime
                                           : $"  [dense]  GoName='{d.GoName}' 웨이트수={d.BlendShapeWeights.Length} " +
                                             $"비0={d.BlendShapeWeights.Count(w => w != 0)}")));
                     }
-                    else
+                    else if (hasWeightsDense || hasWeightsSparse)
                     {
-                        Debug.LogWarning($"[Parser] .prefab 파싱 결과 0개: {pathname} — " +
+                        // 블렌드쉐이프가 있어야 하는데 파싱 결과가 0개인 경우만 경고
+                        Debug.LogWarning($"[Parser] .prefab 파싱 결과 0개 (블렌드쉐이프 있음): {pathname} — " +
                                          $"hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
                                          $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
+                    }
+                    else
+                    {
+                        Debug.Log($"[Parser] .prefab 블렌드쉐이프 없음 (정상): {pathname}");
                     }
                 }
                 catch (Exception ex)
@@ -485,65 +513,153 @@ namespace VirtualDresser.Runtime
         private static readonly System.Text.RegularExpressions.Regex GuidRegex =
             new(@"guid:\s*([a-f0-9]{32})", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+        // {r: 0.8, g: 0.6, b: 0.6, a: 1} 또는 줄바꿈 형식 파싱용
+        private static readonly Regex ColorInlineRx = new Regex(
+            @"\{r:\s*([\d.eE+-]+),\s*g:\s*([\d.eE+-]+),\s*b:\s*([\d.eE+-]+),\s*a:\s*([\d.eE+-]+)\}",
+            RegexOptions.Compiled);
+
         private static MaterialTextures ParseMatFile(
             string matContent, string matName,
             Dictionary<string, string> guidToPathname)
         {
             var result = new MaterialTextures();
-            bool found = false;
+            bool foundTex = false;
 
-            string currentProp = null;
-            foreach (var line in matContent.Split('\n'))
+            // ── 섹션 상태 머신 ──
+            // section: "texenvs" | "floats" | "colors" | null
+            string section      = null;
+            string currentProp  = null;   // texenvs 안 현재 프로퍼티 키 (main/bump/emission)
+            string pendingColorProp = null; // colors 섹션에서 값을 기다리는 프로퍼티명
+
+            foreach (var rawLine in matContent.Split('\n'))
             {
+                var line    = rawLine.TrimEnd('\r');
                 var trimmed = line.Trim();
+                if (trimmed.Length == 0) continue;
 
-                // ★ .mat YAML 구조: "    - _MainTex:" → trim → "- _MainTex:"
-                //   리스트 항목 접두사 "- " 를 제거해야 StartsWith 가 올바르게 동작
+                // ── 최상위 m_ShaderKeywords / m_CustomRenderQueue ──
+                if (trimmed.StartsWith("m_ShaderKeywords:"))
+                {
+                    result.Keywords = trimmed.Substring("m_ShaderKeywords:".Length).Trim();
+                    continue;
+                }
+                if (trimmed.StartsWith("m_CustomRenderQueue:"))
+                {
+                    if (int.TryParse(trimmed.Substring("m_CustomRenderQueue:".Length).Trim(), out var rq))
+                        result.RenderQueue = rq;
+                    continue;
+                }
+
+                // ── 섹션 전환 ──
+                if (trimmed.StartsWith("m_TexEnvs:"))  { section = "texenvs"; currentProp = null; continue; }
+                if (trimmed.StartsWith("m_Floats:"))   { section = "floats";  continue; }
+                if (trimmed.StartsWith("m_Colors:"))   { section = "colors";  pendingColorProp = null; continue; }
+                // 다른 최상위 키가 나오면 섹션 종료
+                if (!line.StartsWith(" ") && !line.StartsWith("\t") && trimmed.Contains(":"))
+                    section = null;
+
+                if (section == null) continue;
+
                 var propKey = trimmed.TrimStart('-', ' ');
 
-                // 프로퍼티 키 감지
-                if (propKey.StartsWith("_MainTex:"))          currentProp = "main";
-                else if (propKey.StartsWith("_BumpMap:") ||
-                         propKey.StartsWith("_NormalMap:"))    currentProp = "bump";
-                else if (propKey.StartsWith("_EmissionMap:"))  currentProp = "emission";
-                else if (propKey.StartsWith("_") && propKey.Contains(":"))
-                    currentProp = null; // 다른 프로퍼티 → 리셋
-
-                if (currentProp == null) continue;
-                if (!trimmed.Contains("guid:")) continue;
-
-                var match = GuidRegex.Match(trimmed);
-                if (!match.Success) continue;
-
-                var texGuid = match.Groups[1].Value;
-                // GUID → 실제 pathname 역매핑
-                string texFilename = null;
-                if (guidToPathname.TryGetValue(texGuid, out var texPathname))
-                    texFilename = Path.GetFileName(texPathname);
-
-                if (texFilename == null) continue; // guid=0 또는 패키지 외부 텍스처
-
-                switch (currentProp)
+                // ──────────────────────────
+                // m_TexEnvs 섹션
+                // ──────────────────────────
+                if (section == "texenvs")
                 {
-                    case "main":
-                        result.MainTex = texFilename;
-                        found = true;
-                        break;
-                    case "bump":
-                        result.BumpMap = texFilename;
-                        break;
-                    case "emission":
-                        result.EmissionMap = texFilename;
-                        break;
+                    if (propKey.StartsWith("_MainTex:"))          currentProp = "main";
+                    else if (propKey.StartsWith("_BumpMap:") ||
+                             propKey.StartsWith("_NormalMap:"))    currentProp = "bump";
+                    else if (propKey.StartsWith("_EmissionMap:"))  currentProp = "emission";
+                    else if (propKey.StartsWith("_") && propKey.Contains(":"))
+                        currentProp = null;
+
+                    if (currentProp == null) continue;
+                    if (!trimmed.Contains("guid:")) continue;
+
+                    var gm = GuidRegex.Match(trimmed);
+                    if (!gm.Success) continue;
+
+                    string texFilename = null;
+                    if (guidToPathname.TryGetValue(gm.Groups[1].Value, out var texPathname))
+                        texFilename = Path.GetFileName(texPathname);
+                    if (texFilename == null) continue;
+
+                    switch (currentProp)
+                    {
+                        case "main":     result.MainTex     = texFilename; foundTex = true; break;
+                        case "bump":     result.BumpMap     = texFilename; break;
+                        case "emission": result.EmissionMap = texFilename; break;
+                    }
+                    currentProp = null;
+                    continue;
                 }
-                currentProp = null;
+
+                // ──────────────────────────
+                // m_Floats 섹션: "- _PropName: 0.5"
+                // ──────────────────────────
+                if (section == "floats")
+                {
+                    // propKey = "_PropName: 0.5"
+                    var colonIdx = propKey.IndexOf(':');
+                    if (colonIdx <= 0) continue;
+                    var key = propKey.Substring(0, colonIdx).Trim();
+                    var val = propKey.Substring(colonIdx + 1).Trim();
+                    if (key.StartsWith("_") && float.TryParse(val,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var fv))
+                    {
+                        result.Floats[key] = fv;
+                    }
+                    continue;
+                }
+
+                // ──────────────────────────
+                // m_Colors 섹션
+                // 형식 1 (inline): "- _Color: {r: 1, g: 1, b: 1, a: 1}"
+                // 형식 2 (block):  "- _Color:\n    r: 1\n    g: 1\n    b: 1\n    a: 1"
+                // ──────────────────────────
+                if (section == "colors")
+                {
+                    // 새 컬러 프로퍼티 시작
+                    if (propKey.StartsWith("_"))
+                    {
+                        var colonIdx = propKey.IndexOf(':');
+                        if (colonIdx <= 0) continue;
+                        var key   = propKey.Substring(0, colonIdx).Trim();
+                        var rest  = propKey.Substring(colonIdx + 1).Trim();
+
+                        // inline 형식
+                        var cm = ColorInlineRx.Match(rest);
+                        if (cm.Success)
+                        {
+                            result.Colors[key] = ParseColorMatch(cm);
+                            pendingColorProp = null;
+                        }
+                        else
+                        {
+                            pendingColorProp = key; // block 형식 — 다음 줄에서 r/g/b/a 읽기
+                        }
+                        continue;
+                    }
+
+                    // block 형식 fallback: inline으로 합쳐서 파싱 시도
+                    if (pendingColorProp != null && trimmed.Contains("{"))
+                    {
+                        var cm = ColorInlineRx.Match(trimmed);
+                        if (cm.Success)
+                        {
+                            result.Colors[pendingColorProp] = ParseColorMatch(cm);
+                            pendingColorProp = null;
+                        }
+                    }
+                    continue;
+                }
             }
 
-            if (!found)
+            if (!foundTex)
             {
-                // 진단: 실패 원인 상세 출력
-                int guidCount = 0;
-                int resolvedCount = 0;
+                int guidCount = 0, resolvedCount = 0;
                 foreach (var line in matContent.Split('\n'))
                 {
                     if (!line.Contains("guid:")) continue;
@@ -551,15 +667,27 @@ namespace VirtualDresser.Runtime
                     if (!m.Success) continue;
                     guidCount++;
                     if (guidToPathname.ContainsKey(m.Groups[1].Value)) resolvedCount++;
-                    else Debug.LogWarning($"[Parser] .mat '{matName}': 외부 GUID 참조 → {m.Groups[1].Value} (패키지 내 없음)");
                 }
-                Debug.LogWarning($"[Parser] .mat '{matName}': GUID 매핑 실패 — " +
-                                 $"GUID 참조 {guidCount}개 중 {resolvedCount}개만 이 패키지 내 존재. " +
-                                 "텍스처가 별도 패키지로 분리됐거나 외부 참조일 가능성.");
-                return null;
+                Debug.LogWarning($"[Parser] .mat '{matName}': 텍스처 GUID 없음 — " +
+                                 $"GUID {guidCount}개 중 {resolvedCount}개만 패키지 내 존재.");
+                // Colors/Floats는 있을 수 있으므로 null 반환하지 않음
+                if (result.Colors.Count == 0 && result.Floats.Count == 0) return null;
             }
 
             return result;
+        }
+
+        private static Color ParseColorMatch(Match m)
+        {
+            float.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var r);
+            float.TryParse(m.Groups[2].Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var g);
+            float.TryParse(m.Groups[3].Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var b);
+            float.TryParse(m.Groups[4].Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var a);
+            return new Color(r, g, b, a);
         }
 
         // ─── 에셋 타입 판별 ───
@@ -698,6 +826,13 @@ namespace VirtualDresser.Runtime
             }
             if (currentId != null)
                 fileIdLines[currentId] = (currentType, currentLines);
+
+            // ── 1패스 진단 ──
+            var typeCounts = fileIdLines.GroupBy(kv => kv.Value.type)
+                .ToDictionary(g => g.Key, g => g.Count());
+            Debug.Log($"[Parser] 1패스 블록수: 전체={fileIdLines.Count} " +
+                      string.Join(", ", typeCounts.OrderBy(kv => kv.Key)
+                          .Select(kv => $"type{kv.Key}={kv.Value}")));
 
             // ── 2패스: GameObject(type=1) 이름 맵 구축 ──
             // fileID → m_Name
@@ -875,6 +1010,7 @@ namespace VirtualDresser.Runtime
                         pendingBsIndex = -1;
                     }
                 }
+
 
                 // 스파스 데이터가 0이 아닌 항목만 유의미하므로 필터링 후 PrefabSmrData 생성
                 foreach (var sm in sparseMap)
