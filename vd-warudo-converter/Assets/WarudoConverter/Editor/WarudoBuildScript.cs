@@ -258,14 +258,21 @@ namespace WarudoConverter
                 string texPath = null;
                 if (matTexMap.TryGetValue(mat.name, out var manifestTexName))
                 {
-                    texByName.TryGetValue(manifestTexName, out texPath);
+                    // tex.name이 확장자 포함("Shinano_body.png")으로 저장되는 경우 대응
+                    var manifestKey = Path.GetFileNameWithoutExtension(manifestTexName);
+
+                    // 정확 일치 우선
+                    texByName.TryGetValue(manifestKey, out texPath);
+                    if (texPath == null) texByName.TryGetValue(manifestTexName, out texPath);
+
+                    // 부분 일치 fallback
                     if (texPath == null)
                     {
-                        // 파일명에 접두사/접미사 변형이 있을 수 있으므로 부분 일치 시도
                         foreach (var kv in texByName)
                         {
-                            if (kv.Key.IndexOf(manifestTexName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                manifestTexName.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                            if (kv.Key.Equals(manifestKey, StringComparison.OrdinalIgnoreCase) ||
+                                kv.Key.IndexOf(manifestKey, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                manifestKey.IndexOf(kv.Key, StringComparison.OrdinalIgnoreCase) >= 0)
                             {
                                 texPath = kv.Value;
                                 break;
@@ -273,9 +280,9 @@ namespace WarudoConverter
                         }
                     }
                     if (texPath != null)
-                        Debug.Log($"[WarudoBuild] manifest 매핑: {mat.name} ← {manifestTexName}");
+                        Debug.Log($"[WarudoBuild] manifest 매핑: {mat.name} ← {Path.GetFileName(texPath)}");
                     else
-                        Debug.LogWarning($"[WarudoBuild] manifest에 '{manifestTexName}'이 있지만 텍스처 파일 없음");
+                        Debug.LogWarning($"[WarudoBuild] manifest에 '{manifestTexName}'이 있지만 텍스처 없음");
                 }
 
                 // 2) manifest에 없으면 이름 기반 fallback
@@ -359,6 +366,10 @@ namespace WarudoConverter
             // ── smrBindings 인덱스: smrName → SmrBinding ──
             var bindingMap = smrBindings.ToDictionary(b => b.SmrName, StringComparer.OrdinalIgnoreCase);
 
+            // ── 의상/헤어 FBX에서 누락 본을 아바타 계층에 이식 (물리/천 시뮬레이션 본 등) ──
+            TransplantMissingBones(clothingAssetDir, root, boneMap);
+            TransplantMissingBones(hairAssetDir,     root, boneMap);
+
             // ── 의상 / 헤어 SMR 이식 ──
             TransplantSmrs(clothingAssetDir, root, boneMap, bindingMap, "Clothing", excludedMeshes);
             TransplantSmrs(hairAssetDir,     root, boneMap, bindingMap, "Hair",     excludedMeshes);
@@ -393,6 +404,73 @@ namespace WarudoConverter
         /// manifest smrBindings의 본 이름 배열을 우선 사용해 아바타 스켈레톤에 바인딩.
         /// manifest에 없으면 FBX의 smr.bones 이름으로 fallback.
         /// </summary>
+        /// <summary>
+        /// 의상/헤어 FBX에 있지만 아바타 계층에 없는 본을 재귀적으로 이식.
+        /// 물리 본, 스커트 본, 리본 본 등 아바타에 없는 시뮬레이션 본들을 추가해
+        /// 의상 SMR의 bone 참조가 null이 되지 않도록 한다.
+        /// </summary>
+        private static void TransplantMissingBones(
+            string srcAssetDir,
+            GameObject avatarRoot,
+            Dictionary<string, Transform> boneMap)
+        {
+            var fbxPaths = FindAllFbx(srcAssetDir);
+            if (fbxPaths.Count == 0) return;
+
+            int added = 0;
+            foreach (var fbxPath in fbxPaths)
+            {
+                var srcPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(fbxPath);
+                if (srcPrefab == null) continue;
+
+                var temp = UnityEngine.Object.Instantiate(srcPrefab);
+                temp.name = "__bonecheck__";
+
+                // 의상 FBX의 모든 Transform을 BFS로 순회 → 아바타에 없는 것만 추가
+                AddMissingBonesRecursive(temp.transform, null, boneMap, ref added);
+
+                UnityEngine.Object.DestroyImmediate(temp);
+            }
+
+            if (added > 0)
+                Debug.Log($"[WarudoBuild] 누락 본 {added}개 아바타 계층에 추가");
+        }
+
+        private static void AddMissingBonesRecursive(
+            Transform src, Transform avatarParent,
+            Dictionary<string, Transform> boneMap, ref int added)
+        {
+            // 이 본이 이미 아바타에 있으면 → 아바타의 해당 본을 부모로 사용
+            if (boneMap.TryGetValue(src.name, out var existing))
+            {
+                // 자식들 처리 (아바타의 해당 본 아래에서 계속)
+                for (int i = 0; i < src.childCount; i++)
+                    AddMissingBonesRecursive(src.GetChild(i), existing, boneMap, ref added);
+            }
+            else if (avatarParent != null)
+            {
+                // 부모는 아바타에 있는데 이 본은 없음 → 아바타 계층에 새로 생성
+                var newBone = new GameObject(src.name);
+                newBone.transform.SetParent(avatarParent, false);
+                newBone.transform.localPosition = src.localPosition;
+                newBone.transform.localRotation = src.localRotation;
+                newBone.transform.localScale    = src.localScale;
+
+                boneMap[src.name] = newBone.transform;
+                added++;
+
+                // 자식도 새 본 아래로
+                for (int i = 0; i < src.childCount; i++)
+                    AddMissingBonesRecursive(src.GetChild(i), newBone.transform, boneMap, ref added);
+            }
+            // avatarParent == null 이면 최상위 GO (FBX root) → 스킵하고 자식만 처리
+            else
+            {
+                for (int i = 0; i < src.childCount; i++)
+                    AddMissingBonesRecursive(src.GetChild(i), null, boneMap, ref added);
+            }
+        }
+
         private static void TransplantSmrs(
             string srcAssetDir,
             GameObject avatarRoot,
