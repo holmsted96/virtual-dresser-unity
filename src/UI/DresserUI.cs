@@ -1348,6 +1348,9 @@ namespace VirtualDresser.UI
             // ── 머티리얼 셰이더 + 속성 전체 (WarudoBuildScript가 lilToon으로 전환 + 적용) ──
             var matPropsJson = BuildMatPropertiesJson();
 
+            // ── PhysBone → physBones 섹션 (의상 + 헤어) ──
+            var physBonesJson = BuildPhysBonesJson();
+
             // ── JSON 조합 ──
             var excludedJson = string.Join(",\n", excluded.Select(n => $"    \"{EscapeJson(n)}\""));
             var matTexJson   = string.Join(",\n", matTexMap.Select(
@@ -1358,7 +1361,8 @@ namespace VirtualDresser.UI
                        "  \"excludedMeshes\": [\n" + excludedJson + "\n  ],\n" +
                        "  \"materialTextures\": {\n" + matTexJson + "\n  },\n" +
                        "  \"matProperties\": " + matPropsJson + ",\n" +
-                       "  \"smrBindings\": [\n" + bindingsJson + "\n  ]\n" +
+                       "  \"smrBindings\": [\n" + bindingsJson + "\n  ],\n" +
+                       "  \"physBones\": [\n" + physBonesJson + "\n  ]\n" +
                        "}";
 
             File.WriteAllText(Path.Combine(inputPath, "manifest.json"), json);
@@ -1444,6 +1448,40 @@ namespace VirtualDresser.UI
             v.ToString("G6", System.Globalization.CultureInfo.InvariantCulture);
 
         /// <summary>
+        /// 의상 + 헤어 ParseResult의 PhysBoneDataList를 JSON 배열 문자열로 반환.
+        /// WarudoBuildScript가 MagicaCloth2 BoneCloth 변환에 사용.
+        /// </summary>
+        private string BuildPhysBonesJson()
+        {
+            var allPb = new List<VirtualDresser.Runtime.PhysBoneData>();
+            if (_clothingParse != null) allPb.AddRange(_clothingParse.PhysBoneDataList);
+            if (_hairParse     != null) allPb.AddRange(_hairParse.PhysBoneDataList);
+
+            if (allPb.Count == 0) return "";
+
+            var entries = new List<string>();
+            foreach (var pb in allPb)
+            {
+                if (string.IsNullOrEmpty(pb.RootBoneName)) continue;
+                var ignoresJson = "[ " + string.Join(", ",
+                    pb.IgnoreBoneNames.Select(n => $"\"{EscapeJson(n)}\"")) + " ]";
+                entries.Add(
+                    $"    {{\n" +
+                    $"      \"rootBone\": \"{EscapeJson(pb.RootBoneName)}\",\n" +
+                    $"      \"pull\": {FmtF(pb.Pull)},\n" +
+                    $"      \"spring\": {FmtF(pb.Spring)},\n" +
+                    $"      \"stiffness\": {FmtF(pb.Stiffness)},\n" +
+                    $"      \"gravity\": {FmtF(pb.Gravity)},\n" +
+                    $"      \"gravityFalloff\": {FmtF(pb.GravityFalloff)},\n" +
+                    $"      \"immobile\": {FmtF(pb.Immobile)},\n" +
+                    $"      \"radius\": {FmtF(pb.Radius)},\n" +
+                    $"      \"ignoreTransforms\": {ignoresJson}\n" +
+                    $"    }}");
+            }
+            return string.Join(",\n", entries);
+        }
+
+        /// <summary>
         /// .prefab에서 파싱한 PrefabSmrDataList를 게임오브젝트의 SMR에 적용.
         ///
         /// 매칭 우선순위:
@@ -1472,20 +1510,30 @@ namespace VirtualDresser.UI
 
                 SkinnedMeshRenderer target = null;
 
-                // ── 1~3: GoName 기반 매칭 (type137 dense or type1001 with GoName) ──
-                if (!string.IsNullOrEmpty(smrData.GoName))
+                // ── 1) MeshGuid 기반 매칭 (가장 정확 — FBX GUID로 직접 식별) ──
+                if (target == null && !string.IsNullOrEmpty(smrData.MeshGuid))
                 {
-                    // 1) 완전 일치
+                    // TriLib 로드된 SMR의 sharedMesh 이름에 guid 일부가 포함되는 경우 대응
+                    target = smrs.FirstOrDefault(s =>
+                        s.sharedMesh != null &&
+                        (s.sharedMesh.name.Contains(smrData.MeshGuid, StringComparison.OrdinalIgnoreCase) ||
+                         s.gameObject.name.Contains(smrData.MeshGuid, StringComparison.OrdinalIgnoreCase)));
+                }
+
+                // ── 2~4: GoName 기반 매칭 ──
+                if (target == null && !string.IsNullOrEmpty(smrData.GoName))
+                {
+                    // 2) 완전 일치
                     target = smrs.FirstOrDefault(s =>
                         s.gameObject.name == smrData.GoName);
 
-                    // 2) 대소문자 무시
+                    // 3) 대소문자 무시
                     if (target == null)
                         target = smrs.FirstOrDefault(s =>
                             string.Equals(s.gameObject.name, smrData.GoName,
                                 StringComparison.OrdinalIgnoreCase));
 
-                    // 3) 부분 포함
+                    // 4) 부분 포함 + 블렌드쉐이프 개수 검증
                     if (target == null)
                     {
                         var goLower = smrData.GoName.ToLowerInvariant();
@@ -1495,47 +1543,44 @@ namespace VirtualDresser.UI
                             var sn = s.gameObject.name.ToLowerInvariant();
                             bool nameMatch = sn.Contains(goLower) || goLower.Contains(sn);
                             if (!isSparse && smrData.BlendShapeWeights != null)
-                            {
-                                bool countOk = s.sharedMesh.blendShapeCount >= smrData.BlendShapeWeights.Length;
-                                return nameMatch && countOk;
-                            }
+                                return nameMatch && s.sharedMesh.blendShapeCount >= smrData.BlendShapeWeights.Length;
                             return nameMatch;
                         });
                     }
                 }
 
-                // ── PrefabInstance: 블렌드쉐이프 최대 인덱스 이상인 SMR 중 하나 매칭 ──
-                // GoName이 null이고 SparseWeights만 있는 경우 (type 1001 일반 케이스)
+                // ── 5) PrefabInstance sparse: 최대 인덱스를 수용하는 미할당 SMR ──
                 if (target == null && isSparse)
                 {
                     int maxIdx = smrData.SparseWeights.Keys.Max();
-                    // 미할당 SMR 중 인덱스 수용 가능한 것, blendShapeCount가 가장 작은 것 우선 (오버매칭 방지)
                     target = smrs
                         .Where(s => s.sharedMesh != null
                                  && s.sharedMesh.blendShapeCount > maxIdx
                                  && !assignedSmrs.Contains(s))
                         .OrderBy(s => s.sharedMesh.blendShapeCount)
+                        .FirstOrDefault()
+                    ?? smrs
+                        .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > maxIdx)
+                        .OrderBy(s => s.sharedMesh.blendShapeCount)
                         .FirstOrDefault();
-                    // 미할당 없으면 이미 할당된 것도 허용 (중복 SMR에 여러 sparse set 적용)
-                    if (target == null)
-                        target = smrs
-                            .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > maxIdx)
-                            .OrderBy(s => s.sharedMesh.blendShapeCount)
-                            .FirstOrDefault();
                 }
 
-                // ── 4: 개수 fallback (dense 전용) ──
+                // ── 6) dense fallback: 블렌드쉐이프 개수 정확 일치 ──
                 if (target == null && !isSparse && smrData.BlendShapeWeights != null)
                 {
-                    foreach (var smr in smrs)
-                    {
-                        if (smr.sharedMesh == null) continue;
-                        if (smr.sharedMesh.blendShapeCount == smrData.BlendShapeWeights.Length)
-                        {
-                            target = smr;
-                            break;
-                        }
-                    }
+                    // 정확 일치 우선
+                    target = smrs.FirstOrDefault(s =>
+                        s.sharedMesh != null &&
+                        s.sharedMesh.blendShapeCount == smrData.BlendShapeWeights.Length &&
+                        !assignedSmrs.Contains(s));
+                    // 없으면 개수 포함(>=) 중 가장 작은 것
+                    if (target == null)
+                        target = smrs
+                            .Where(s => s.sharedMesh != null &&
+                                        s.sharedMesh.blendShapeCount >= smrData.BlendShapeWeights.Length &&
+                                        !assignedSmrs.Contains(s))
+                            .OrderBy(s => s.sharedMesh.blendShapeCount)
+                            .FirstOrDefault();
                 }
 
                 if (target == null)

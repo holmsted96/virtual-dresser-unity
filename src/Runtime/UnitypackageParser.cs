@@ -55,6 +55,12 @@ namespace VirtualDresser.Runtime
         /// 값: float[] — 블렌드쉐이프 인덱스 순서대로
         /// </summary>
         public List<PrefabSmrData> PrefabSmrDataList = new();
+
+        /// <summary>
+        /// .prefab에서 파싱한 VRCPhysBone 컴포넌트 목록.
+        /// 루트 본 이름 기준으로 저장됨.
+        /// </summary>
+        public List<PhysBoneData> PhysBoneDataList = new();
     }
 
     /// <summary>
@@ -71,6 +77,23 @@ namespace VirtualDresser.Runtime
         public string TargetFileId;       // FBX 내 컴포넌트 fileID (B형 그룹핑 키)
         public float[] BlendShapeWeights; // A형: 밀집 배열 (index 0부터 순서대로)
         public Dictionary<int, float> SparseWeights; // B형: {blendshape index → value}
+    }
+
+    /// <summary>
+    /// .prefab YAML에서 파싱한 VRCPhysBone 컴포넌트 데이터.
+    /// WarudoBuildScript가 MagicaCloth2 BoneCloth로 변환할 때 사용.
+    /// </summary>
+    public class PhysBoneData
+    {
+        public string RootBoneName;               // rootTransform fileID → GO 이름
+        public List<string> IgnoreBoneNames = new(); // ignoreTransforms 역참조
+        public float Pull       = 0.2f;           // stiffness
+        public float Spring     = 0.6f;           // elasticity / damping 역수
+        public float Stiffness  = 0.2f;
+        public float Gravity    = 0f;
+        public float GravityFalloff = 0f;
+        public float Immobile   = 0f;             // inertia
+        public float Radius     = 0.02f;          // capsule radius
     }
 
     public class MaterialTextures
@@ -244,6 +267,14 @@ namespace VirtualDresser.Runtime
 
                     var smrDataList = ParsePrefabBlendShapes(prefabText);
                     result.PrefabSmrDataList.AddRange(smrDataList);
+
+                    var pbDataList = ParsePrefabPhysBones(prefabText);
+                    if (pbDataList.Count > 0)
+                    {
+                        result.PhysBoneDataList.AddRange(pbDataList);
+                        Debug.Log($"[Parser] PhysBone {pbDataList.Count}개 파싱: " +
+                                  string.Join(", ", pbDataList.Select(pb => pb.RootBoneName ?? "(null)")));
+                    }
 
                     if (smrDataList.Count > 0)
                     {
@@ -950,6 +981,7 @@ namespace VirtualDresser.Runtime
 
                 string currentTargetFileId = null;
                 int    pendingBsIndex      = -1;   // propertyPath에서 읽은 BS 인덱스 (value 대기 중)
+                bool   pendingBsHandled    = false; // value: 를 이미 읽었는지
                 bool   inModifications     = false;
 
                 foreach (var l in kv.Value.lines)
@@ -963,10 +995,12 @@ namespace VirtualDresser.Runtime
                     }
                     if (!inModifications) continue;
 
-                    // 새 수정 항목: "- target: {fileID: N, guid: G, type: 3}"
-                    if (t.StartsWith("- target:"))
+                    // 새 수정 항목 시작: "- target: {fileID: N, guid: G, type: 3}"
+                    // 또는 들여쓰기 없는 "target:" (YAML 포맷 변형)
+                    if (t.StartsWith("- target:") || t.StartsWith("target:"))
                     {
-                        pendingBsIndex = -1;   // 이전 항목 리셋
+                        pendingBsIndex   = -1;
+                        pendingBsHandled = false;
                         var tm = targetRx.Match(t);
                         if (tm.Success)
                         {
@@ -983,13 +1017,15 @@ namespace VirtualDresser.Runtime
                     if (t.StartsWith("propertyPath:"))
                     {
                         var bm = bsIndexRx.Match(t);
-                        pendingBsIndex = bm.Success ? int.Parse(bm.Groups[1].Value) : -1;
+                        pendingBsIndex   = bm.Success ? int.Parse(bm.Groups[1].Value) : -1;
+                        pendingBsHandled = false;
                         continue;
                     }
 
-                    // value: N  — pendingBsIndex가 유효할 때만 처리
-                    if (t.StartsWith("value:") && pendingBsIndex >= 0)
+                    // value: N  — pendingBsIndex가 유효하고 아직 처리 안 된 경우만
+                    if (t.StartsWith("value:") && pendingBsIndex >= 0 && !pendingBsHandled)
                     {
+                        pendingBsHandled = true;
                         var valStr = t.Substring("value:".Length).Trim();
                         if (float.TryParse(valStr,
                             System.Globalization.NumberStyles.Float,
@@ -1000,15 +1036,19 @@ namespace VirtualDresser.Runtime
                                 sparseMap[currentTargetFileId] = new Dictionary<int, float>();
                             sparseMap[currentTargetFileId][pendingBsIndex] = val;
                         }
-                        pendingBsIndex = -1;
+                        // pendingBsIndex는 유지 — objectReference: 등이 와도 이미 처리됨
                         continue;
                     }
 
-                    // objectReference 등 다른 필드는 pendingBsIndex 리셋
-                    if (!t.StartsWith("value:") && !t.StartsWith("propertyPath:") &&
-                        !t.StartsWith("- target:") && t.Length > 0)
+                    // objectReference: 는 같은 항목의 일부 — pendingBsIndex 리셋하지 않음
+                    if (t.StartsWith("objectReference:")) continue;
+
+                    // 새 "- target:" 이 아닌 다른 최상위 필드(들여쓰기 없음)가 오면 리셋
+                    if (!l.StartsWith(" ") && !l.StartsWith("\t") && t.Length > 0 &&
+                        !t.StartsWith("propertyPath:") && !t.StartsWith("value:"))
                     {
-                        pendingBsIndex = -1;
+                        pendingBsIndex   = -1;
+                        pendingBsHandled = false;
                     }
                 }
 
@@ -1053,6 +1093,213 @@ namespace VirtualDresser.Runtime
                       $"type1001={result.Count(r => r.SparseWeights != null)}개");
 
             return result;
+        }
+
+        // ─── PhysBone 파싱 ───
+
+        // 알려진 VRCPhysBone 스크립트 GUID (SDK 버전별)
+        private static readonly System.Collections.Generic.HashSet<string> KnownPhysBoneGuids =
+            new(System.StringComparer.OrdinalIgnoreCase)
+        {
+            "b5b91f6a99e085e45a3ac7e0f9d52b66",  // SDK3 Avatars 3.4.x
+            "a19745fe6a28f2f4fbe2b87efbe1bdbc",  // SDK3 Avatars 3.5.x
+            "c00b24272c19b4b42b36b561f27fef78",  // SDK3 Avatars 3.3.x
+        };
+
+        /// <summary>
+        /// type=114 MonoBehaviour 블록이 VRCPhysBone인지 판별.
+        /// GUID 화이트리스트 우선, 실패 시 속성 패턴으로 판별.
+        /// </summary>
+        private static bool IsVRCPhysBone(List<string> lines)
+        {
+            bool hasPull = false, hasSpring = false, hasRootTransform = false;
+            foreach (var l in lines)
+            {
+                var t = l.TrimStart();
+                if (t.StartsWith("m_Script:") && t.Contains("guid:"))
+                {
+                    var gm = System.Text.RegularExpressions.Regex.Match(t, @"guid:\s*([0-9a-f]{32})",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (gm.Success && KnownPhysBoneGuids.Contains(gm.Groups[1].Value))
+                        return true;  // GUID 확정
+                }
+                if (t.StartsWith("pull:"))            hasPull = true;
+                if (t.StartsWith("spring:"))          hasSpring = true;
+                if (t.StartsWith("rootTransform:"))   hasRootTransform = true;
+            }
+            // GUID 미매칭 → 속성 패턴으로 fallback
+            return hasPull && hasSpring && hasRootTransform;
+        }
+
+        /// <summary>
+        /// fileID → 본 이름 역참조.
+        /// type=1(GameObject) 직접 매핑 또는 type=4(Transform) 경유 해결.
+        /// </summary>
+        private static string ResolveFileIdToBoneName(
+            string fileId,
+            Dictionary<string, (int type, List<string> lines)> fileIdLines,
+            Dictionary<string, string> goNames)
+        {
+            if (string.IsNullOrEmpty(fileId) || fileId == "0") return null;
+
+            // type=1 GameObject 직접 매핑
+            if (goNames.TryGetValue(fileId, out var name)) return name;
+
+            // type=4 Transform 경유 → m_GameObject.fileID → GO 이름
+            if (fileIdLines.TryGetValue(fileId, out var block) && block.type == 4)
+            {
+                foreach (var l in block.lines)
+                {
+                    var t = l.TrimStart();
+                    if (t.StartsWith("m_GameObject:"))
+                    {
+                        var gm = System.Text.RegularExpressions.Regex.Match(t, @"fileID:\s*(-?\d+)");
+                        if (gm.Success && goNames.TryGetValue(gm.Groups[1].Value, out var goName))
+                            return goName;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// prefab YAML에서 VRCPhysBone 컴포넌트(type=114)를 파싱해 PhysBoneData 목록 반환.
+        /// </summary>
+        private static List<PhysBoneData> ParsePrefabPhysBones(string prefabYaml)
+        {
+            var result = new List<PhysBoneData>();
+
+            // 1패스: fileID → (type, lines) 맵 구축
+            var fileIdLines = new Dictionary<string, (int type, List<string> lines)>();
+            string currentId = null; int currentType = 0; List<string> currentLines = null;
+            var headerRx = new System.Text.RegularExpressions.Regex(
+                @"^---\s+!u!(\d+)\s+&(-?\d+)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            foreach (var raw in prefabYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var m = headerRx.Match(line);
+                if (m.Success)
+                {
+                    if (currentId != null) fileIdLines[currentId] = (currentType, currentLines);
+                    currentType  = int.Parse(m.Groups[1].Value);
+                    currentId    = m.Groups[2].Value;
+                    currentLines = new List<string>();
+                    continue;
+                }
+                currentLines?.Add(line);
+            }
+            if (currentId != null) fileIdLines[currentId] = (currentType, currentLines);
+
+            // 2패스: GO 이름 맵
+            var goNames = new Dictionary<string, string>();
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 1) continue;
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+                    if (t.StartsWith("m_Name:"))
+                    { goNames[kv.Key] = t.Substring("m_Name:".Length).Trim(); break; }
+                }
+            }
+
+            // 3패스: type=114 MonoBehaviour → VRCPhysBone 판별 및 파싱
+            var ignoreFileRx = new System.Text.RegularExpressions.Regex(
+                @"fileID:\s*(-?\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 114) continue;
+                if (!IsVRCPhysBone(kv.Value.lines)) continue;
+
+                var pb = new PhysBoneData();
+                bool inIgnore = false;
+
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+
+                    // rootTransform → 본 이름 역참조
+                    if (t.StartsWith("rootTransform:"))
+                    {
+                        var gm = ignoreFileRx.Match(t);
+                        if (gm.Success)
+                        {
+                            var fid = gm.Groups[1].Value;
+                            if (fid == "0")
+                            {
+                                // fileID:0 = self → 이 MonoBehaviour의 m_GameObject 역참조
+                                foreach (var bl in kv.Value.lines)
+                                {
+                                    var bt = bl.TrimStart();
+                                    if (bt.StartsWith("m_GameObject:"))
+                                    {
+                                        var bgm = ignoreFileRx.Match(bt);
+                                        if (bgm.Success)
+                                            pb.RootBoneName = ResolveFileIdToBoneName(bgm.Groups[1].Value, fileIdLines, goNames);
+                                        break;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                pb.RootBoneName = ResolveFileIdToBoneName(fid, fileIdLines, goNames);
+                            }
+                        }
+                        inIgnore = false;
+                        continue;
+                    }
+
+                    // ignoreTransforms 섹션
+                    if (t.StartsWith("ignoreTransforms:")) { inIgnore = true; continue; }
+                    if (inIgnore)
+                    {
+                        if (t.StartsWith("- {fileID:") || t.StartsWith("-{fileID:"))
+                        {
+                            var gm = ignoreFileRx.Match(t);
+                            if (gm.Success)
+                            {
+                                var boneName = ResolveFileIdToBoneName(gm.Groups[1].Value, fileIdLines, goNames);
+                                if (!string.IsNullOrEmpty(boneName))
+                                    pb.IgnoreBoneNames.Add(boneName);
+                            }
+                            continue;
+                        }
+                        // 다른 섹션 시작이면 종료
+                        if (!t.StartsWith("-") && t.Contains(":")) inIgnore = false;
+                    }
+
+                    // float 파라미터 파싱
+                    TryParseFloat(t, "pull:",           ref pb.Pull);
+                    TryParseFloat(t, "spring:",         ref pb.Spring);
+                    TryParseFloat(t, "stiffness:",      ref pb.Stiffness);
+                    TryParseFloat(t, "gravity:",        ref pb.Gravity);
+                    TryParseFloat(t, "gravityFalloff:", ref pb.GravityFalloff);
+                    TryParseFloat(t, "immobile:",       ref pb.Immobile);
+                    TryParseFloat(t, "radius:",         ref pb.Radius);
+                }
+
+                if (!string.IsNullOrEmpty(pb.RootBoneName))
+                    result.Add(pb);
+                else
+                    Debug.LogWarning("[Parser] PhysBone rootBone 이름 해결 실패 (fileID 역참조 누락)");
+            }
+
+            return result;
+        }
+
+        private static void TryParseFloat(string trimmedLine, string prefix, ref float target)
+        {
+            if (!trimmedLine.StartsWith(prefix)) return;
+            var valStr = trimmedLine.Substring(prefix.Length).Trim();
+            // 커브 참조 등 비숫자 제거 ("0 {curveType..." 형태)
+            var spaceIdx = valStr.IndexOf(' ');
+            if (spaceIdx > 0) valStr = valStr.Substring(0, spaceIdx);
+            if (float.TryParse(valStr, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+                target = v;
         }
     }
 }

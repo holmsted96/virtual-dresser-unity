@@ -53,8 +53,8 @@ namespace WarudoConverter
         private static void RunBuild(string inputPath, string outputPath, string avatarName)
         {
             // manifest.json 읽기
-            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var matProps, out var smrBindings);
-            Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, matProps: {matProps.Count}개, SMR바인딩: {smrBindings.Count}개");
+            ReadManifest(inputPath, out var excludedMeshes, out var matTexMap, out var matProps, out var smrBindings, out var physBones);
+            Debug.Log($"[WarudoBuild] 제외: {excludedMeshes.Count}개, 머티리얼: {matTexMap.Count}개, matProps: {matProps.Count}개, SMR바인딩: {smrBindings.Count}개, PhysBone: {physBones.Count}개");
 
             var importRoot  = $"Assets/VDImport_{avatarName}";
             var avatarDir   = $"{importRoot}/Avatar";
@@ -127,6 +127,18 @@ namespace WarudoConverter
             var prefabPath = BuildCombinedPrefab(
                 importRoot, avatarFbxPath, clothingDir, hairDir, avatarName,
                 excludedMeshes, smrBindings, texByName);
+
+            // ── [6.5] MagicaCloth2 BoneCloth 적용 ──
+#if MAGICA_CLOTH2
+            if (physBones.Count > 0)
+            {
+                Debug.Log($"[WarudoBuild] MagicaCloth2 BoneCloth 적용: {physBones.Count}개");
+                ApplyMagicaClothBones(prefabPath, physBones);
+            }
+#else
+            if (physBones.Count > 0)
+                Debug.Log($"[WarudoBuild] PhysBone {physBones.Count}개 감지됨 — MAGICA_CLOTH2 define 추가 시 자동 변환됩니다.");
+#endif
 
             // ── [7] .warudo 빌드 ──
             BuildWarudoMod(prefabPath, outputPath, avatarName);
@@ -460,6 +472,96 @@ namespace WarudoConverter
             public Dictionary<string, float[]> Colors = new();  // RGBA float[4]
             public Dictionary<string, float>   Floats = new();
         }
+
+        // ── DresserUI에서 export된 PhysBone 데이터 ──
+
+        public class PhysBoneManifestData
+        {
+            public string RootBone      = "";
+            public float  Pull          = 0.2f;
+            public float  Spring        = 0.6f;
+            public float  Stiffness     = 0.2f;
+            public float  Gravity       = 0f;
+            public float  GravityFalloff= 0f;
+            public float  Immobile      = 0f;
+            public float  Radius        = 0.02f;
+            public List<string> IgnoreTransforms = new();
+        }
+
+#if MAGICA_CLOTH2
+        /// <summary>
+        /// 프리팹에 MagicaCloth2 BoneCloth 컴포넌트를 추가.
+        /// PhysBone 파라미터를 변환 공식으로 MagicaCloth2 설정에 적용.
+        /// </summary>
+        private static void ApplyMagicaClothBones(string prefabPath, List<PhysBoneManifestData> physBones)
+        {
+            var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefabAsset == null)
+            {
+                Debug.LogWarning($"[MagicaCloth] 프리팹 로드 실패: {prefabPath}");
+                return;
+            }
+
+            var instance = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+
+            // 본 이름 → Transform 맵 (첫 매칭 우선)
+            var transformMap = new Dictionary<string, Transform>(StringComparer.Ordinal);
+            foreach (var tf in instance.GetComponentsInChildren<Transform>(true))
+                if (!transformMap.ContainsKey(tf.name))
+                    transformMap[tf.name] = tf;
+
+            int applied = 0;
+            foreach (var pb in physBones)
+            {
+                if (!transformMap.TryGetValue(pb.RootBone, out var rootTf))
+                {
+                    Debug.LogWarning($"[MagicaCloth] 루트 본 없음: '{pb.RootBone}'");
+                    continue;
+                }
+
+                var mc = rootTf.gameObject.AddComponent<MagicaCloth2.MagicaCloth>();
+                mc.SerializeData.clothType = MagicaCloth2.ClothProcess.ClothType.BoneCloth;
+                mc.SerializeData.rootBones.Add(rootTf);
+
+                // ── 파라미터 변환 ──
+                var param = mc.SerializeData.parameters;
+
+                // pull → stiffness (0~1)
+                param.stiffnessConstraint.stiffness.SetValue(Mathf.Clamp01(pb.Pull));
+
+                // spring → damping (반비례: spring 높을수록 잘 튀므로 damping은 낮게)
+                // MagicaCloth2의 damping은 velocity dampening (0=감쇠없음, 1=즉시정지)
+                // VRC spring=0 → 뻣뻣, spring=1 → 잘 흔들림 → damping = 1 - spring
+                param.dampingConstraint.damping.SetValue(Mathf.Clamp01(1f - pb.Spring));
+
+                // gravity (VRC gravity는 -1~1, 양수=아래방향)
+                param.gravity = pb.Gravity * 9.8f;
+                param.gravityDirection = new Vector3(0f, -1f, 0f);
+
+                // immobile → inertia (VRC immobile 높을수록 덜 움직임)
+                param.inertiaConstraint.movementInertia = Mathf.Clamp01(pb.Immobile);
+
+                // ignoreTransforms
+                foreach (var ignoreName in pb.IgnoreTransforms)
+                {
+                    if (!string.IsNullOrEmpty(ignoreName) &&
+                        transformMap.TryGetValue(ignoreName, out var ignoreTf))
+                        mc.SerializeData.colliderCollisionConstraint.ignoreTransformList.Add(ignoreTf);
+                }
+
+                mc.OnValidate();
+                EditorUtility.SetDirty(mc);
+                applied++;
+                Debug.Log($"[MagicaCloth] BoneCloth 적용: '{pb.RootBone}' " +
+                          $"stiffness={pb.Pull:F2} damping={1f-pb.Spring:F2} gravity={pb.Gravity*9.8f:F2}");
+            }
+
+            PrefabUtility.SaveAsPrefabAsset(instance, prefabPath);
+            UnityEngine.Object.DestroyImmediate(instance);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[MagicaCloth] 완료: {applied}/{physBones.Count}개 BoneCloth 적용");
+        }
+#endif
 
         /// <summary>
         /// DresserUI manifest의 matProperties를 머티리얼에 적용.
@@ -1007,17 +1109,20 @@ namespace WarudoConverter
             out HashSet<string> excludedMeshes,
             out Dictionary<string, string> matTexMap,
             out Dictionary<string, MatProps> matProps,
-            out List<SmrBinding> smrBindings)
+            out List<SmrBinding> smrBindings,
+            out List<PhysBoneManifestData> physBones)
         {
             var ex  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var mtm = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var mp  = new Dictionary<string, MatProps>(StringComparer.OrdinalIgnoreCase);
             var sb  = new List<SmrBinding>();
+            var pb  = new List<PhysBoneManifestData>();
 
             excludedMeshes = ex;
             matTexMap      = mtm;
             matProps       = mp;
             smrBindings    = sb;
+            physBones      = pb;
 
             var manifestPath = Path.Combine(inputPath, "manifest.json");
             if (!File.Exists(manifestPath)) return;
@@ -1076,6 +1181,47 @@ namespace WarudoConverter
                             sb.Add(binding);
                     }
                 }
+            }
+
+            // ── physBones: PhysBone → MagicaCloth2 변환 데이터 ──
+            ParsePhysBones(json, pb);
+        }
+
+        private static void ParsePhysBones(string json, List<PhysBoneManifestData> result)
+        {
+            try
+            {
+                var root = JObject.Parse(json);
+                var arr  = root["physBones"] as JArray;
+                if (arr == null) return;
+
+                foreach (var token in arr)
+                {
+                    var obj = token as JObject;
+                    if (obj == null) continue;
+
+                    var p = new PhysBoneManifestData();
+                    p.RootBone      = obj["rootBone"]?.Value<string>() ?? "";
+                    p.Pull          = obj["pull"]?.Value<float>()          ?? 0.2f;
+                    p.Spring        = obj["spring"]?.Value<float>()        ?? 0.6f;
+                    p.Stiffness     = obj["stiffness"]?.Value<float>()     ?? 0.2f;
+                    p.Gravity       = obj["gravity"]?.Value<float>()       ?? 0f;
+                    p.GravityFalloff= obj["gravityFalloff"]?.Value<float>()??0f;
+                    p.Immobile      = obj["immobile"]?.Value<float>()      ?? 0f;
+                    p.Radius        = obj["radius"]?.Value<float>()        ?? 0.02f;
+
+                    if (obj["ignoreTransforms"] is JArray ignoreArr)
+                        foreach (var ig in ignoreArr)
+                            p.IgnoreTransforms.Add(ig.Value<string>() ?? "");
+
+                    if (!string.IsNullOrEmpty(p.RootBone))
+                        result.Add(p);
+                }
+                Debug.Log($"[WarudoBuild] physBones 로드: {result.Count}개");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WarudoBuild] physBones 파싱 실패: {e.Message}");
             }
         }
 
