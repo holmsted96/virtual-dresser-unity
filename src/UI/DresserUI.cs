@@ -174,6 +174,86 @@ namespace VirtualDresser.UI
         private void Start()
         {
             SubscribeCameraClick();
+            SubscribeElectronBridge();
+        }
+
+        private void SubscribeElectronBridge()
+        {
+            ElectronBridge.OnMessage += OnElectronMessage;
+            Debug.Log("[DresserUI] ElectronBridge.OnMessage 구독 완료");
+        }
+
+        private void OnDestroy()
+        {
+            ElectronBridge.OnMessage -= OnElectronMessage;
+        }
+
+        private void OnElectronMessage(string type, object raw)
+        {
+            var json = raw as string ?? "";
+            switch (type)
+            {
+                case "loadAvatar":
+                    var avatarPath = ExtractJsonString(json, "path");
+                    if (!string.IsNullOrEmpty(avatarPath))
+                    {
+                        Debug.Log($"[DresserUI] Electron → loadAvatar: {avatarPath}");
+                        HandleFileDrop(avatarPath, "avatar");
+                    }
+                    break;
+                case "loadClothing":
+                    var clothingPath = ExtractJsonString(json, "path");
+                    if (!string.IsNullOrEmpty(clothingPath))
+                    {
+                        Debug.Log($"[DresserUI] Electron → loadClothing: {clothingPath}");
+                        HandleFileDrop(clothingPath, "clothing");
+                    }
+                    break;
+                case "loadHair":
+                    var hairPath = ExtractJsonString(json, "path");
+                    if (!string.IsNullOrEmpty(hairPath))
+                    {
+                        Debug.Log($"[DresserUI] Electron → loadHair: {hairPath}");
+                        HandleFileDrop(hairPath, "hair");
+                    }
+                    break;
+                case "exportWarudo":
+                    Debug.Log("[DresserUI] Electron → exportWarudo");
+                    OnBuildButtonClicked();
+                    break;
+                case "setMeshVisible":
+                    var meshName = ExtractJsonString(json, "name");
+                    var visibleStr = ExtractJsonString(json, "visible");
+                    if (!string.IsNullOrEmpty(meshName))
+                        SetMeshVisibleByName(meshName, visibleStr == "true");
+                    break;
+            }
+        }
+
+        private static string ExtractJsonString(string json, string field)
+        {
+            // "field":"value" 형태 파싱 (Newtonsoft 없이)
+            var key = $"\"{field}\":\"";
+            var idx = json.IndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return "";
+            var start = idx + key.Length;
+            var end = json.IndexOf('"', start);
+            return end < 0 ? "" : json.Substring(start, end - start);
+        }
+
+        private void SetMeshVisibleByName(string meshName, bool visible)
+        {
+            foreach (var group in _meshGroups)
+            {
+                var entry = group.Entries.FirstOrDefault(e => e.MeshName == meshName);
+                if (entry != null)
+                {
+                    entry.IsVisible = visible;
+                    if (entry.Renderer != null) entry.Renderer.enabled = visible;
+                    RefreshMeshPanel();
+                    return;
+                }
+            }
         }
 
         private void SubscribeCameraClick()
@@ -672,6 +752,11 @@ namespace VirtualDresser.UI
                             var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
                             if (hidden.Count > 0)
                                 Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
+
+                            // 단일 바디 메시 발 클리핑 힌트
+                            var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
+                            if (hint != null)
+                                SetParseStatus($"Tip: {hint}");
                         }
                     }
 
@@ -683,6 +768,20 @@ namespace VirtualDresser.UI
                         // 처리하기 위해 avatarRoot 전체(아바타+의상 모두 포함)를 검색 대상으로 넘김
                         var searchRoot = (avatarRoot != null) ? avatarRoot.gameObject : go;
                         ApplyPrefabBlendShapes(searchRoot, result);
+                    }
+
+                    // ── 의상 본 회전 → 아바타에 이식 ──
+                    // 1) Prefab m_LocalRotation 파싱 성공한 경우 우선 적용
+                    // 2) 항상: 의상 FBX 본 회전을 아바타 본에 이식 (힐 각도, 리본 루트 등)
+                    if (avatarRoot != null)
+                    {
+                        if (result.AnimClipBonePoses.Count > 0)
+                        {
+                            Debug.Log($"[DresserUI] 의상 Prefab 본 회전 {result.AnimClipBonePoses.Count}개 → 아바타 적용");
+                            ApplyAnimClipBonePoses(avatarRoot.gameObject, result.AnimClipBonePoses);
+                        }
+                        // 의상 FBX에서 직접 본 회전 이식 (Prefab 데이터 보완/대체)
+                        MeshCombiner.CopyOutfitBoneRotations(avatarRoot, go, _currentAvatarConfig);
                     }
 
                     // layerKey: 첫 번째는 "clothing", 나머지는 "clothing_fbxName" (고유 키)
