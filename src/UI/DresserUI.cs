@@ -585,15 +585,25 @@ namespace VirtualDresser.UI
                 ShowLoading("Importing Avatar", "Applying textures & materials...", 0.70f);
                 await MaterialManager.ApplyTexturesAsync(go, result, _currentAvatarConfig);
 
-                // ── Prefab 블렌드쉐이프 적용 ──
+                // ── Prefab 블렌드쉐이프 적용 (sparse/dense) ──
                 Debug.Log($"[DresserUI] PrefabSmrDataList: {result.PrefabSmrDataList.Count}개");
                 if (result.PrefabSmrDataList.Count > 0)
                     ApplyPrefabBlendShapes(go, result);
-                else
-                    Debug.LogWarning("[DresserUI] Prefab 블렌드쉐이프 없음 — .prefab 파일 미포함이거나 파싱 실패");
+
+                // ── VRCAvatarDescriptor → FX AnimClip 기본 블렌드쉐이프 적용 ──
+                if (result.AvatarDefaultBlendShapes.Count > 0)
+                    ApplyAvatarDefaultBlendShapes(go, result.AvatarDefaultBlendShapes);
+
+                // ── AnimClip Transform 커브 → 본 포즈 오버라이드 (힐 각도 등) ──
+                if (result.AnimClipBonePoses.Count > 0)
+                    ApplyAnimClipBonePoses(go, result.AnimClipBonePoses);
 
                 ShowLoading("Importing Avatar", "Finalizing...", 0.92f);
                 RegisterMeshGroup("avatar", displayName, go);
+
+                // ── Prefab m_IsActive: 0 → 비활성 메시 자동 숨김 ──
+                if (result.InactiveGoNames.Count > 0)
+                    ApplyPrefabInactiveState(go, result.InactiveGoNames);
                 FocusCameraOnAvatar(go);
 
                 // 포즈 컨트롤러 초기화
@@ -603,6 +613,10 @@ namespace VirtualDresser.UI
 
                 HideLoading();
                 SetParseStatus($"Avatar loaded: {displayName}");
+
+                // Electron React UI에 알림
+                if (ElectronBridge.Instance != null)
+                    ElectronBridge.Instance.SendAvatarLoaded(displayName, GetMeshDtos("avatar"));
             }
             catch (Exception e)
             {
@@ -664,7 +678,12 @@ namespace VirtualDresser.UI
                     await MaterialManager.ApplyTexturesAsync(go, result, _currentAvatarConfig);
 
                     if (result.PrefabSmrDataList.Count > 0)
-                        ApplyPrefabBlendShapes(go, result);
+                    {
+                        // 의상 prefab이 아바타 SMR을 직접 수정하는 경우(신발 → 발 블렌드쉐이프 등)를
+                        // 처리하기 위해 avatarRoot 전체(아바타+의상 모두 포함)를 검색 대상으로 넘김
+                        var searchRoot = (avatarRoot != null) ? avatarRoot.gameObject : go;
+                        ApplyPrefabBlendShapes(searchRoot, result);
+                    }
 
                     // layerKey: 첫 번째는 "clothing", 나머지는 "clothing_fbxName" (고유 키)
                     var layerKey = i == 0 ? "clothing" : $"clothing_{fbxName}";
@@ -678,6 +697,10 @@ namespace VirtualDresser.UI
 
             HideLoading();
             SetParseStatus($"Clothing loaded: {displayName} ({fbxPaths.Count} FBX)");
+
+            // Electron React UI에 알림
+            if (ElectronBridge.Instance != null)
+                ElectronBridge.Instance.SendClothingLoaded(displayName, GetMeshDtos("clothing"));
         }
 
         private async void LoadHairFbx(ParseResult result, string displayName)
@@ -785,6 +808,20 @@ namespace VirtualDresser.UI
             RefreshMeshPanel();
             RefreshLayerPanel();
             SwitchTab("layer");
+        }
+
+        // ─── ElectronBridge 헬퍼 ───
+
+        private IEnumerable<MeshEntryDto> GetMeshDtos(string layerKeyPrefix)
+        {
+            var result = new List<MeshEntryDto>();
+            foreach (var group in _meshGroups)
+            {
+                if (!group.LayerKey.StartsWith(layerKeyPrefix)) continue;
+                foreach (var entry in group.Entries)
+                    result.Add(new MeshEntryDto { name = entry.MeshName, visible = entry.IsVisible });
+            }
+            return result;
         }
 
         // ─── 레이어 패널 렌더 ───
@@ -1237,6 +1274,8 @@ namespace VirtualDresser.UI
             SetParseStatus("⏳ Building .warudo...");
             Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}  (firstRun={isFirstRun})");
 
+            ElectronBridge.Instance?.SendExportStatus("building", "Starting headless build...");
+
             WarudoHeadlessBuilder.BuildWarudo(
                 inputPath, outputPath, avatarName,
                 onComplete: (result, error) =>
@@ -1249,18 +1288,23 @@ namespace VirtualDresser.UI
                         {
                             SetParseStatus($"✅ .warudo created!\nSaved to: {outputPath}");
                             Debug.Log($"[DresserUI] 빌드 완료: {result}");
+                            ElectronBridge.Instance?.SendExportStatus("done", outputPath);
                         }
                         else
                         {
                             SetParseStatus($"❌ Build failed\n{error}");
                             Debug.LogError($"[DresserUI] 빌드 실패: {error}");
+                            ElectronBridge.Instance?.SendExportStatus("error", error);
                         }
                     });
                 },
                 onProgress: (step, progress) =>
                 {
                     UnityMainThreadDispatcher.Enqueue(() =>
-                        ShowLoading("Building .warudo", step, progress));
+                    {
+                        ShowLoading("Building .warudo", step, progress);
+                        ElectronBridge.Instance?.SendExportStatus("building", step);
+                    });
                 });
         }
 
@@ -1333,6 +1377,19 @@ namespace VirtualDresser.UI
                     var matsJson  = "[ " + string.Join(", ", matNames.Select(n => $"\"{n}\"")) + " ]";
                     var texsJson  = "[ " + string.Join(", ", texNames.Select(n => $"\"{n}\"")) + " ]";
 
+                    // 블렌드쉐이프 현재 값 (0이 아닌 것만 index→value 기록)
+                    var bsEntries = new List<string>();
+                    var mesh = smr.sharedMesh;
+                    for (int bi = 0; bi < mesh.blendShapeCount; bi++)
+                    {
+                        var w = smr.GetBlendShapeWeight(bi);
+                        if (w != 0f)
+                            bsEntries.Add($"\"{EscapeJson(mesh.GetBlendShapeName(bi))}\": {w.ToString("F4", System.Globalization.CultureInfo.InvariantCulture)}");
+                    }
+                    var bsJson = bsEntries.Count > 0
+                        ? "{ " + string.Join(", ", bsEntries) + " }"
+                        : "{}";
+
                     smrBindings.Add(
                         $"    {{\n" +
                         $"      \"smrName\": \"{EscapeJson(smr.name)}\",\n" +
@@ -1340,7 +1397,8 @@ namespace VirtualDresser.UI
                         $"      \"rootBone\": \"{rootBoneName}\",\n" +
                         $"      \"materials\": {matsJson},\n" +
                         $"      \"textures\": {texsJson},\n" +
-                        $"      \"boneNames\": {bonesJson}\n" +
+                        $"      \"boneNames\": {bonesJson},\n" +
+                        $"      \"blendShapes\": {bsJson}\n" +
                         $"    }}");
                 }
             }
@@ -1549,20 +1607,50 @@ namespace VirtualDresser.UI
                     }
                 }
 
-                // ── 5) PrefabInstance sparse: 최대 인덱스를 수용하는 미할당 SMR ──
+                // ── 5) PrefabInstance sparse fallback: 최대 인덱스를 수용하는 SMR ──
                 if (target == null && isSparse)
                 {
                     int maxIdx = smrData.SparseWeights.Keys.Max();
-                    target = smrs
-                        .Where(s => s.sharedMesh != null
-                                 && s.sharedMesh.blendShapeCount > maxIdx
-                                 && !assignedSmrs.Contains(s))
-                        .OrderBy(s => s.sharedMesh.blendShapeCount)
-                        .FirstOrDefault()
-                    ?? smrs
-                        .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > maxIdx)
-                        .OrderBy(s => s.sharedMesh.blendShapeCount)
-                        .FirstOrDefault();
+
+                    // GoName이 null이거나, GoName이 있어도 scene에서 이미 못 찾은 경우
+                    // → 외부 패키지(신발 등)가 아바타 바디 SMR을 직접 수정하는 크로스패키지 케이스로 판단
+                    bool crossPackage = string.IsNullOrEmpty(smrData.GoName);
+
+                    var candidates = smrs.Where(s => s.sharedMesh != null
+                                                  && s.sharedMesh.blendShapeCount > maxIdx);
+
+                    if (crossPackage)
+                    {
+                        // 블렌드쉐이프 수 내림차순 — 아바타 바디 메시가 가장 많음
+                        target = candidates
+                            .OrderByDescending(s => s.sharedMesh.blendShapeCount)
+                            .FirstOrDefault();
+                        if (target != null)
+                            Debug.Log($"[DresserUI] cross-package sparse BS → 바디메시 {target.name} 적용 (GoName=null, maxIdx={maxIdx})");
+                    }
+                    else
+                    {
+                        // 같은 패키지 내: 미할당 중 가장 작은 것 (기존 로직)
+                        target = candidates
+                            .Where(s => !assignedSmrs.Contains(s))
+                            .OrderBy(s => s.sharedMesh.blendShapeCount)
+                            .FirstOrDefault()
+                        ?? candidates
+                            .OrderBy(s => s.sharedMesh.blendShapeCount)
+                            .FirstOrDefault();
+
+                        // 그래도 못 찾으면: GoName이 있지만 scene에 없는 경우
+                        // → 이 패키지가 다른 패키지(아바타) SMR을 수정하는 케이스
+                        if (target == null)
+                        {
+                            target = smrs.Where(s => s.sharedMesh != null
+                                                  && s.sharedMesh.blendShapeCount > maxIdx)
+                                .OrderByDescending(s => s.sharedMesh.blendShapeCount)
+                                .FirstOrDefault();
+                            if (target != null)
+                                Debug.Log($"[DresserUI] cross-package sparse BS → 바디메시 {target.name} 적용 (GoName={smrData.GoName}, maxIdx={maxIdx})");
+                        }
+                    }
                 }
 
                 // ── 6) dense fallback: 블렌드쉐이프 개수 정확 일치 ──
@@ -1586,7 +1674,8 @@ namespace VirtualDresser.UI
                 if (target == null)
                 {
                     Debug.LogWarning($"[DresserUI] Prefab 블렌드쉐이프 매칭 실패: GoName='{smrData.GoName}' " +
-                                     $"isSparse={isSparse}");
+                                     $"MeshGuid='{smrData.MeshGuid}' isSparse={isSparse} " +
+                                     $"검색된SMR={smrs.Length}개 (maxIdx={( isSparse ? smrData.SparseWeights.Keys.Max().ToString() : "-")})");
                     continue;
                 }
 
@@ -1641,6 +1730,123 @@ namespace VirtualDresser.UI
                 Debug.LogWarning($"[DresserUI] Prefab 블렌드쉐이프: 파싱된 {parseResult.PrefabSmrDataList.Count}개 중 " +
                                  $"적용된 것 없음 — GoName 목록: " +
                                  string.Join(", ", parseResult.PrefabSmrDataList.Select(d => $"'{d.GoName}'")));
+        }
+
+        /// <summary>
+        /// prefab에서 m_IsActive: 0 으로 설정된 GO 이름과 일치하는 MeshGroup Entry를
+        /// 숨김(IsVisible=false) 처리하고 UI를 갱신.
+        /// </summary>
+        /// <summary>
+        /// VRCAvatarDescriptor → FX AnimatorController → 기본 상태 AnimationClip에서 추출한
+        /// 블렌드쉐이프 기본값을 SMR에 적용합니다.
+        /// defaults: GO이름(경로 끝) → (블렌드쉐이프 이름 → 값)
+        /// </summary>
+        private static void ApplyAvatarDefaultBlendShapes(
+            GameObject go, Dictionary<string, Dictionary<string, float>> defaults)
+        {
+            var smrs = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            int totalApplied = 0;
+
+            foreach (var smr in smrs)
+            {
+                var mesh = smr.sharedMesh;
+                if (mesh == null || mesh.blendShapeCount == 0) continue;
+
+                // GO 이름 또는 경로 끝 이름으로 매칭
+                Dictionary<string, float> bsMap = null;
+                var goNameLow = smr.gameObject.name.ToLowerInvariant();
+                foreach (var kv in defaults)
+                {
+                    if (string.Equals(kv.Key, smr.gameObject.name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        bsMap = kv.Value; break;
+                    }
+                }
+                if (bsMap == null) continue;
+
+                int applied = 0;
+                foreach (var kv in bsMap)
+                {
+                    int idx = mesh.GetBlendShapeIndex(kv.Key);
+                    if (idx >= 0)
+                    {
+                        smr.SetBlendShapeWeight(idx, kv.Value);
+                        applied++;
+                    }
+                    else
+                        Debug.LogWarning($"[DresserUI] AnimClip BS '{kv.Key}' → SMR '{smr.name}'에서 인덱스 없음");
+                }
+
+                if (applied > 0)
+                {
+                    totalApplied += applied;
+                    Debug.Log($"[DresserUI] AnimClip 기본 BS 적용: {smr.name} {applied}개");
+                }
+            }
+
+            if (totalApplied > 0)
+                Debug.Log($"[DresserUI] AnimClip 기본 블렌드쉐이프 총 {totalApplied}개 적용 완료");
+            else
+                Debug.LogWarning($"[DresserUI] AnimClip 기본 BS: SMR 매칭 실패 — 파싱된 GO 목록: " +
+                                 string.Join(", ", defaults.Keys));
+        }
+
+        /// <summary>
+        /// AnimationClip Transform 커브에서 추출한 본 포즈를 아바타에 적용.
+        /// 힐 착용 시 발 각도 등 bone-driven 포즈 보정에 사용.
+        /// </summary>
+        private static void ApplyAnimClipBonePoses(GameObject go, Dictionary<string, UnityEngine.Vector3> bonePoses)
+        {
+            // 아바타 전체 Transform을 이름 기준으로 인덱싱
+            var boneByName = new Dictionary<string, Transform>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in go.GetComponentsInChildren<Transform>(true))
+                boneByName.TryAdd(t.name, t);
+
+            int applied = 0;
+            foreach (var (boneName, euler) in bonePoses)
+            {
+                if (!boneByName.TryGetValue(boneName, out var bone)) continue;
+                bone.localEulerAngles = euler;
+                applied++;
+                Debug.Log($"[DresserUI] 본 포즈 오버라이드: {boneName} → euler({euler.x:F1}, {euler.y:F1}, {euler.z:F1})");
+            }
+
+            if (applied > 0)
+                Debug.Log($"[DresserUI] 본 포즈 총 {applied}개 적용 완료");
+            else
+                Debug.LogWarning($"[DresserUI] 본 포즈: 매칭 실패 — 파싱된 본 목록: {string.Join(", ", bonePoses.Keys)}");
+        }
+
+        private void ApplyPrefabInactiveState(GameObject avatarGo, HashSet<string> inactiveGoNames)
+        {
+            int hidden = 0;
+            foreach (var group in _meshGroups)
+            {
+                foreach (var entry in group.Entries)
+                {
+                    if (entry.IsDeleted || !entry.IsVisible) continue;
+                    var smr = entry.Renderer;
+                    if (smr == null) continue;
+
+                    // GO 이름 또는 SMR 이름이 비활성 목록에 포함되면 숨김
+                    bool shouldHide = inactiveGoNames.Contains(smr.gameObject.name)
+                                   || inactiveGoNames.Contains(smr.name);
+
+                    if (shouldHide)
+                    {
+                        entry.IsVisible = false;
+                        smr.gameObject.SetActive(false);
+                        hidden++;
+                        Debug.Log($"[DresserUI] Prefab 비활성 → 숨김: {smr.gameObject.name}");
+                    }
+                }
+            }
+
+            if (hidden > 0)
+            {
+                Debug.Log($"[DresserUI] Prefab 비활성 메시 총 {hidden}개 숨김");
+                RefreshMeshPanel();
+            }
         }
 
         private static string EscapeJson(string s) =>
@@ -2542,6 +2748,9 @@ namespace VirtualDresser.UI
             int pct = Mathf.RoundToInt(progress * 100f);
             _loadingPct.text   = $"{pct}%";
             _progressFill.style.width = new StyleLength(new Length(pct, LengthUnit.Percent));
+
+            // Electron React UI에 진행률 전달
+            ElectronBridge.Instance?.SendImportProgress(progress);
         }
 
         private void HideLoading()

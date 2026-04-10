@@ -80,6 +80,10 @@ namespace VirtualDresser.Editor
             if (manager.GetComponent<UnityMainThreadDispatcher>() == null)
                 manager.AddComponent<UnityMainThreadDispatcher>();
 
+            // ElectronBridge (Electron React UI 연동)
+            if (manager.GetComponent<ElectronBridge>() == null)
+                manager.AddComponent<ElectronBridge>();
+
             // ── 3. Main Camera ──
             var cam = Camera.main;
             if (cam == null)
@@ -112,7 +116,7 @@ namespace VirtualDresser.Editor
             // ── 완료 ──
             EditorUtility.SetDirty(manager);
             Debug.Log("[SceneSetup] 씬 셋업 완료!\n" +
-                      "- DresserManager (UIDocument + DresserUI + UnityMainThreadDispatcher)\n" +
+                      "- DresserManager (UIDocument + DresserUI + UnityMainThreadDispatcher + ElectronBridge)\n" +
                       "- AvatarRoot\n" +
                       "- Main Camera (CameraController)\n" +
                       "- Directional Light");
