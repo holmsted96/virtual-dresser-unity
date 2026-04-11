@@ -51,3 +51,6 @@ vd-warudo-converter/Assets/VDImport_*/
 vd-warudo-converter/Assets/VDImport_*.meta
 vd-warudo-converter/Assets/Packages/
 vd-warudo-converter/Assets/Packages.meta
+
+# Claude Code 개인 설정 (bypassPermissions 등)
+.claude/settings.local.json

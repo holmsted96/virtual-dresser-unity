@@ -100,6 +100,13 @@ namespace VirtualDresser.Runtime
         public Dictionary<string, string> FbxFileIdToName = new();
 
         /// <summary>
+        /// PrefabInstance m_Modifications에서 파싱한 본 Transform 수정 목록.
+        /// Shrink 본 scale=0 등 cross-package 본 변형에 사용.
+        /// DresserUI에서 avatarFbxFileIdToName으로 bone 이름 해석 후 적용.
+        /// </summary>
+        public List<PrefabBoneModData> PrefabBoneMods = new();
+
+        /// <summary>
         /// 내부 임시 저장: prefab 파싱 시 수집한 fileID → quaternion[x,y,z,w].
         /// FBX meta 파싱(1.5패스) 이후 ResolveRotationsToBonePoses()로 이름 매핑 완료.
         /// </summary>
@@ -131,6 +138,26 @@ namespace VirtualDresser.Runtime
         public string TargetFileId;       // FBX 내 컴포넌트 fileID (B형 그룹핑 키)
         public float[] BlendShapeWeights; // A형: 밀집 배열 (index 0부터 순서대로)
         public Dictionary<int, float> SparseWeights; // B형: {blendshape index → value}
+    }
+
+    /// <summary>
+    /// PrefabInstance m_Modifications에서 파싱한 본(Transform) 스케일/포지션 수정 데이터.
+    /// Shrink 본 (Shrink_Upper_leg 등) scale=0 적용에 사용.
+    /// </summary>
+    public class PrefabBoneModData
+    {
+        public string TargetFileId;  // FBX 내 Transform의 fileID
+        public string TargetGuid;    // FBX 파일 GUID (아바타 FBX GUID와 일치해야 함)
+        public float? ScaleX, ScaleY, ScaleZ;
+        public float? PosX,   PosY,   PosZ;
+
+        public bool HasScale => ScaleX.HasValue || ScaleY.HasValue || ScaleZ.HasValue;
+        public bool HasPos   => PosX.HasValue   || PosY.HasValue   || PosZ.HasValue;
+
+        public Vector3 GetScale(Vector3 fallback) => new Vector3(
+            ScaleX ?? fallback.x, ScaleY ?? fallback.y, ScaleZ ?? fallback.z);
+        public Vector3 GetPos(Vector3 fallback) => new Vector3(
+            PosX ?? fallback.x, PosY ?? fallback.y, PosZ ?? fallback.z);
     }
 
     /// <summary>
@@ -391,7 +418,7 @@ namespace VirtualDresser.Runtime
                     Debug.Log($"[Parser] .prefab 분석: hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
                               $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
 
-                    var smrDataList = ParsePrefabBlendShapes(prefabText, result._PendingRotationMap);
+                    var smrDataList = ParsePrefabBlendShapes(prefabText, result._PendingRotationMap, result.PrefabBoneMods);
                     result.PrefabSmrDataList.AddRange(smrDataList);
 
                     // m_IsActive: 0 인 GO 이름 수집
@@ -1416,7 +1443,8 @@ namespace VirtualDresser.Runtime
         /// </summary>
         private static List<PrefabSmrData> ParsePrefabBlendShapes(
             string prefabYaml,
-            Dictionary<string, float[]> outRotationMap = null)
+            Dictionary<string, float[]> outRotationMap = null,
+            List<PrefabBoneModData> outBoneMods = null)
         {
             if (string.IsNullOrEmpty(prefabYaml)) return new List<PrefabSmrData>();
 
@@ -1633,6 +1661,10 @@ namespace VirtualDresser.Runtime
                 bool   pendingBsHandled    = false; // value: 를 이미 읽었는지
                 bool   inModifications     = false;
                 string pendingRotComp      = null;  // "x","y","z","w" — m_LocalRotation 파싱 중
+                string pendingScaleComp    = null;  // "x","y","z" — m_LocalScale 파싱 중
+                string pendingPosComp      = null;  // "x","y","z" — m_LocalPosition 파싱 중
+                // fileId → PrefabBoneModData (scale/pos 누적용)
+                var boneModMap = new Dictionary<string, PrefabBoneModData>();
 
                 foreach (var l in kv.Value.lines)
                 {
@@ -1652,6 +1684,8 @@ namespace VirtualDresser.Runtime
                         pendingBsIndex   = -1;
                         pendingBsHandled = false;
                         pendingRotComp   = null;
+                        pendingScaleComp = null;
+                        pendingPosComp   = null;
                         var tm = targetRx.Match(t);
                         if (tm.Success)
                         {
@@ -1664,7 +1698,7 @@ namespace VirtualDresser.Runtime
 
                     if (currentTargetFileId == null) continue;
 
-                    // propertyPath: m_BlendShapeWeights.Array.data[N]  or  m_LocalRotation.x/y/z/w
+                    // propertyPath: m_BlendShapeWeights / m_LocalRotation / m_LocalScale / m_LocalPosition
                     if (t.StartsWith("propertyPath:"))
                     {
                         var path = t.Substring("propertyPath:".Length).Trim();
@@ -1672,13 +1706,15 @@ namespace VirtualDresser.Runtime
                         pendingBsIndex   = bm.Success ? int.Parse(bm.Groups[1].Value) : -1;
                         pendingBsHandled = false;
                         pendingRotComp   = null;
+                        pendingScaleComp = null;
+                        pendingPosComp   = null;
 
-                        // m_LocalRotation.x/y/z/w 감지
                         if (path.StartsWith("m_LocalRotation."))
-                        {
-                            pendingRotComp = path.Substring("m_LocalRotation.".Length).Trim(); // "x","y","z","w"
-                            Debug.Log($"[Parser] Prefab 회전 발견: fileID={currentTargetFileId} comp={pendingRotComp}");
-                        }
+                            pendingRotComp = path.Substring("m_LocalRotation.".Length).Trim();
+                        else if (path.StartsWith("m_LocalScale."))
+                            pendingScaleComp = path.Substring("m_LocalScale.".Length).Trim();
+                        else if (path.StartsWith("m_LocalPosition."))
+                            pendingPosComp = path.Substring("m_LocalPosition.".Length).Trim();
                         continue;
                     }
 
@@ -1717,7 +1753,34 @@ namespace VirtualDresser.Runtime
                                     case "z": rot[2] = val; break;
                                     case "w": rot[3] = val; break;
                                 }
-                                Debug.Log($"[Parser] 회전 값 수집: fileID={currentTargetFileId} {pendingRotComp}={val:F4}");
+                            }
+                            // m_LocalScale 처리
+                            else if (pendingScaleComp != null)
+                            {
+                                pendingBsHandled = true;
+                                if (!boneModMap.ContainsKey(currentTargetFileId))
+                                    boneModMap[currentTargetFileId] = new PrefabBoneModData();
+                                var bmod = boneModMap[currentTargetFileId];
+                                switch (pendingScaleComp)
+                                {
+                                    case "x": bmod.ScaleX = val; break;
+                                    case "y": bmod.ScaleY = val; break;
+                                    case "z": bmod.ScaleZ = val; break;
+                                }
+                            }
+                            // m_LocalPosition 처리
+                            else if (pendingPosComp != null)
+                            {
+                                pendingBsHandled = true;
+                                if (!boneModMap.ContainsKey(currentTargetFileId))
+                                    boneModMap[currentTargetFileId] = new PrefabBoneModData();
+                                var bmod = boneModMap[currentTargetFileId];
+                                switch (pendingPosComp)
+                                {
+                                    case "x": bmod.PosX = val; break;
+                                    case "y": bmod.PosY = val; break;
+                                    case "z": bmod.PosZ = val; break;
+                                }
                             }
                         }
                         else if (pendingBsIndex >= 0)
@@ -1738,9 +1801,28 @@ namespace VirtualDresser.Runtime
                         pendingBsIndex   = -1;
                         pendingBsHandled = false;
                         pendingRotComp   = null;
+                        pendingScaleComp = null;
+                        pendingPosComp   = null;
                     }
                 }
 
+                // boneModMap → outBoneMods 추가
+                if (outBoneMods != null)
+                {
+                    foreach (var bm in boneModMap)
+                    {
+                        if (bm.Value.HasScale || bm.Value.HasPos)
+                        {
+                            guidMap.TryGetValue(bm.Key, out var bmGuid);
+                            bm.Value.TargetFileId = bm.Key;
+                            bm.Value.TargetGuid   = bmGuid;
+                            outBoneMods.Add(bm.Value);
+                        }
+                    }
+                    if (outBoneMods.Count > 0)
+                        Debug.Log($"[Parser] 본 Transform 수정 {outBoneMods.Count}개 파싱 완료 " +
+                                  $"(scale: {outBoneMods.Count(b => b.HasScale)}, pos: {outBoneMods.Count(b => b.HasPos)})");
+                }
 
                 // sparse 전체 카운트 진단
                 int totalSparseEntries = sparseMap.Values.Sum(d => d.Count);

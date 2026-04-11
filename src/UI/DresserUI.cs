@@ -95,6 +95,9 @@ namespace VirtualDresser.UI
         private AvatarConfig _currentAvatarConfig;
         private PoseController _poseController;
 
+        // ─── 아바타 FBX fileID → 본 이름 캐시 (의상 bone mod 적용에 사용) ───
+        private Dictionary<string, string> _avatarFbxFileIdToName = new();
+
         // ─── 레이어별 GameObject 참조 (머티리얼 격리에 사용) ───
         private GameObject _avatarGo;
         private GameObject _clothingGo;
@@ -1060,6 +1063,13 @@ namespace VirtualDresser.UI
                 go.transform.SetParent(avatarRoot, false);
                 _avatarGo = go;
 
+                // 아바타 FBX fileID → 본 이름 캐시 저장 (의상 bone mod 적용에 사용)
+                if (result.FbxFileIdToName.Count > 0)
+                {
+                    _avatarFbxFileIdToName = new Dictionary<string, string>(result.FbxFileIdToName);
+                    Debug.Log($"[DresserUI] 아바타 fileIdToName 캐시: {_avatarFbxFileIdToName.Count}개");
+                }
+
                 // 아바타 config 로드 (boneMap alias 매칭에 사용)
                 _currentAvatarConfig = result.DetectedName != null
                     ? AvatarConfigLoader.Get(result.DetectedName)
@@ -1109,6 +1119,7 @@ namespace VirtualDresser.UI
                 SetParseStatus($"Avatar loaded: {displayName}");
 
                 BridgeSendAvatarLoaded(displayName, GetMeshDtos("avatar"));
+                SendAllBlendShapes();
             }
             catch (Exception e)
             {
@@ -1186,6 +1197,10 @@ namespace VirtualDresser.UI
                         ApplyPrefabBlendShapes(searchRoot, result);
                     }
 
+                    // ── 의상 prefab 본 Transform 수정 (Shrink 본 scale 등) → 아바타에 적용 ──
+                    if (result.PrefabBoneMods.Count > 0 && avatarRoot != null)
+                        ApplyPrefabBoneMods(avatarRoot, result.PrefabBoneMods, _avatarFbxFileIdToName);
+
                     // ── 의상 본 회전 → 아바타에 이식 ──
                     // 1) Prefab m_LocalRotation 파싱 성공한 경우 우선 적용
                     // 2) 항상: 의상 FBX 본 회전을 아바타 본에 이식 (힐 각도, 리본 루트 등)
@@ -1215,6 +1230,7 @@ namespace VirtualDresser.UI
 
             // Electron React UI에 알림
             BridgeSendClothingLoaded(displayName, GetMeshDtos("clothing"));
+            SendAllBlendShapes();
         }
 
         private async void LoadHairFbx(ParseResult result, string displayName)
@@ -1338,6 +1354,35 @@ namespace VirtualDresser.UI
             var list = meshes is IList<MeshEntryDto> l ? l : new System.Collections.Generic.List<MeshEntryDto>(meshes);
             ElectronBridge.Instance?.SendClothingLoaded(name, list);
             WebViewBridge.Instance?.SendClothingLoaded(name, list);
+        }
+
+        // 전체 메쉬의 블렌드쉐이프 목록을 React에 전송
+        // { type:"allBlendShapes", meshes:[{ name, blendShapes:[{index,name,value}] }] }
+        private void SendAllBlendShapes()
+        {
+            var meshParts = new System.Collections.Generic.List<string>();
+            foreach (var group in _meshGroups)
+            {
+                foreach (var entry in group.Entries)
+                {
+                    if (entry.IsDeleted || entry.Renderer == null) continue;
+                    var mesh = entry.Renderer.sharedMesh;
+                    if (mesh == null || mesh.blendShapeCount == 0) continue;
+
+                    var bsParts = new System.Collections.Generic.List<string>();
+                    for (int i = 0; i < mesh.blendShapeCount; i++)
+                    {
+                        string bsName = mesh.GetBlendShapeName(i)
+                            .Replace("\\","\\\\").Replace("\"","\\\"");
+                        float w = entry.Renderer.GetBlendShapeWeight(i);
+                        string wStr = w.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                        bsParts.Add($"{{\"index\":{i},\"name\":\"{bsName}\",\"value\":{wStr}}}");
+                    }
+                    string meshName = entry.MeshName.Replace("\\","\\\\").Replace("\"","\\\"");
+                    meshParts.Add($"{{\"name\":\"{meshName}\",\"blendShapes\":[{string.Join(",", bsParts)}]}}");
+                }
+            }
+            BridgeSendJson($"{{\"type\":\"allBlendShapes\",\"meshes\":[{string.Join(",", meshParts)}]}}");
         }
 
         private void BridgeSendImportProgress(float progress, string title = "", string step = "")
@@ -2342,6 +2387,80 @@ namespace VirtualDresser.UI
                 Debug.LogWarning($"[DresserUI] Prefab 블렌드쉐이프: 파싱된 {parseResult.PrefabSmrDataList.Count}개 중 " +
                                  $"적용된 것 없음 — GoName 목록: " +
                                  string.Join(", ", parseResult.PrefabSmrDataList.Select(d => $"'{d.GoName}'")));
+        }
+
+        /// <summary>
+        /// 의상 prefab PrefabInstance m_Modifications에서 파싱한 본 Transform 수정을 아바타에 적용.
+        /// 시나노처럼 Shrink 본 scale=0 으로 클리핑을 방지하는 방식에 대응.
+        ///
+        /// fileIdToName: 아바타 FBX .meta의 fileIDToRecycleName (LoadAvatarFbx 시 캐시)
+        /// </summary>
+        private static void ApplyPrefabBoneMods(
+            Transform avatarRoot,
+            List<PrefabBoneModData> boneMods,
+            Dictionary<string, string> fileIdToName)
+        {
+            if (boneMods == null || boneMods.Count == 0) return;
+
+            // 아바타 전체 본을 이름으로 인덱싱
+            var boneByName = new Dictionary<string, Transform>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in avatarRoot.GetComponentsInChildren<Transform>(true))
+            {
+                if (!boneByName.ContainsKey(t.name))
+                    boneByName[t.name] = t;
+            }
+
+            int applied = 0;
+            var missing = new List<string>();
+
+            foreach (var mod in boneMods)
+            {
+                if (!mod.HasScale && !mod.HasPos) continue;
+
+                // fileID → 본 이름 해석
+                string boneName = null;
+                if (mod.TargetFileId != null)
+                    fileIdToName?.TryGetValue(mod.TargetFileId, out boneName);
+
+                if (boneName == null)
+                {
+                    missing.Add($"fileID={mod.TargetFileId}(미해석)");
+                    continue;
+                }
+
+                if (!boneByName.TryGetValue(boneName, out var bone))
+                {
+                    // 정규화 fallback: "Shrink_Upper_leg.L" → 파트 매칭
+                    var normBone = boneName.Replace(".", "_").ToLowerInvariant();
+                    bone = boneByName.Values.FirstOrDefault(b =>
+                        b.name.Replace(".", "_").ToLowerInvariant() == normBone);
+                }
+
+                if (bone == null)
+                {
+                    missing.Add($"{boneName}(본 없음)");
+                    continue;
+                }
+
+                if (mod.HasScale)
+                {
+                    var prev = bone.localScale;
+                    bone.localScale = mod.GetScale(prev);
+                    Debug.Log($"[DresserUI] 본 scale 적용: {bone.name} {prev} → {bone.localScale}");
+                }
+                if (mod.HasPos)
+                {
+                    var prev = bone.localPosition;
+                    bone.localPosition = mod.GetPos(prev);
+                    Debug.Log($"[DresserUI] 본 pos 적용: {bone.name} {prev} → {bone.localPosition}");
+                }
+                applied++;
+            }
+
+            if (applied > 0)
+                Debug.Log($"[DresserUI] 본 Transform 수정 총 {applied}개 적용 완료");
+            if (missing.Count > 0)
+                Debug.LogWarning($"[DresserUI] 본 mod 적용 실패 {missing.Count}개: {string.Join(", ", missing.Take(10))}");
         }
 
         /// <summary>

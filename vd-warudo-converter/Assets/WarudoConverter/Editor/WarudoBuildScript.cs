@@ -984,6 +984,20 @@ namespace WarudoConverter
                     newSmr.rootBone        = reboundRoot;
                     newSmr.localBounds     = smr.localBounds;
 
+                    // ── 블렌드쉐이프 값 적용 (manifest blendShapes) ──
+                    if (binding?.BlendShapes != null && binding.BlendShapes.Count > 0 &&
+                        newSmr.sharedMesh != null)
+                    {
+                        var bsMesh = newSmr.sharedMesh;
+                        foreach (var kv in binding.BlendShapes)
+                        {
+                            int idx = bsMesh.GetBlendShapeIndex(kv.Key);
+                            if (idx >= 0)
+                                newSmr.SetBlendShapeWeight(idx, kv.Value);
+                        }
+                        Debug.Log($"[WarudoBuild] 블렌드쉐이프 적용: {smr.name} {binding.BlendShapes.Count}개");
+                    }
+
                     // ── 슬롯별 텍스처 직접 적용 ──
                     if (binding != null &&
                         binding.Textures != null &&
@@ -1177,6 +1191,7 @@ namespace WarudoConverter
                         binding.Materials = mats.ToArray();
                         binding.Textures  = texs.ToArray();
                         binding.BoneNames = bones.ToArray();
+                        binding.BlendShapes = ParseBlendShapesDict(obj, "blendShapes");
                         if (!string.IsNullOrEmpty(binding.SmrName))
                             sb.Add(binding);
                     }
@@ -1285,6 +1300,38 @@ namespace WarudoConverter
 
         // ── 간단한 JSON 파싱 헬퍼 ──
 
+        // blendShapes: { "name": value, ... } 형식 파싱
+        private static Dictionary<string, float> ParseBlendShapesDict(string json, string key)
+        {
+            var result = new Dictionary<string, float>(StringComparer.Ordinal);
+            var keyIdx = json.IndexOf($"\"{key}\"", StringComparison.Ordinal);
+            if (keyIdx < 0) return result;
+            var objOpen = json.IndexOf('{', keyIdx);
+            if (objOpen < 0) return result;
+            int depth = 0; int objClose = -1;
+            for (int i = objOpen; i < json.Length; i++)
+            {
+                if (json[i] == '{') depth++;
+                else if (json[i] == '}') { depth--; if (depth == 0) { objClose = i; break; } }
+            }
+            if (objClose < 0) return result;
+            var inner = json.Substring(objOpen + 1, objClose - objOpen - 1).Trim();
+            if (inner.Length == 0) return result;
+            // "name": value 쌍 파싱 (쉼표 구분)
+            foreach (var pair in inner.Split(','))
+            {
+                var p = pair.Trim();
+                var colon = p.IndexOf(':');
+                if (colon < 0) continue;
+                var name = p.Substring(0, colon).Trim().Trim('"');
+                var valStr = p.Substring(colon + 1).Trim();
+                if (float.TryParse(valStr, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var val))
+                    result[name] = val;
+            }
+            return result;
+        }
+
         private static void ParseJsonArray(string json, string key, Action<IEnumerable<string>> handler)
         {
             var keyIdx = json.IndexOf($"\"{key}\"", StringComparison.Ordinal);
@@ -1367,6 +1414,7 @@ namespace WarudoConverter
             public string[] Materials;
             public string[] Textures;   // 슬롯별 텍스처 파일명 (인덱스 기반)
             public string[] BoneNames;
+            public Dictionary<string, float> BlendShapes; // 블렌드쉐이프 이름 → 값 (0이 아닌 것만)
         }
 
         private static string GetArg(string[] args, string name)
