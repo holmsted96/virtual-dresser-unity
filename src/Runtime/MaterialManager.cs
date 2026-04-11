@@ -510,25 +510,54 @@ namespace VirtualDresser.Runtime
 
         /// <summary>
         /// 임시 폴더의 텍스처 파일들을 Texture2D로 비동기 로드.
-        /// material-manager.ts loadTexture() 포팅
+        /// 최적화: 디스크 읽기를 최대 4개 병렬 처리 → GPU 처리는 메인 스레드에서 순차 처리.
         /// </summary>
         private static async Task<Dictionary<string, Texture2D>> LoadAllTexturesAsync(
             string tempDir, List<string> textureNames)
         {
             var result = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
 
+            // 캐시 히트 먼저 분리
+            var toLoad = new List<(string name, string path)>();
             foreach (var name in textureNames)
             {
                 var path = Path.Combine(tempDir, name);
                 if (!File.Exists(path)) continue;
-
                 if (TextureCache.TryGetValue(path, out var cached))
+                { result[name] = cached; continue; }
+                toLoad.Add((name, path));
+            }
+
+            if (toLoad.Count == 0) return result;
+
+            // 1단계: 디스크 읽기 병렬 (최대 8개 동시, SSD 기준) — I/O 대기시간 겹치기
+            var sem = new System.Threading.SemaphoreSlim(8);
+            var readTasks = toLoad.Select(async item =>
+            {
+                await sem.WaitAsync();
+                try
                 {
-                    result[name] = cached;
+                    var bytes = await Task.Run(() =>
+                    {
+                        try { return File.ReadAllBytes(item.path); }
+                        catch { return null; }
+                    });
+                    return (item.name, item.path, bytes);
+                }
+                finally { sem.Release(); }
+            });
+            var allBytes = await Task.WhenAll(readTasks);
+
+            // 2단계: GPU 처리 순차 (메인 스레드 필수 — LoadImage, Blit, ReadPixels)
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var (name, path, bytes) in allBytes)
+            {
+                if (bytes == null)
+                {
+                    Debug.LogWarning($"[MaterialManager] 파일 읽기 실패: {Path.GetFileName(path)}");
                     continue;
                 }
-
-                var tex = await LoadTextureFromFileAsync(path);
+                var tex = ProcessTextureBytes(path, bytes);
                 if (tex != null)
                 {
                     tex.name = name;
@@ -536,27 +565,18 @@ namespace VirtualDresser.Runtime
                     result[name] = tex;
                 }
             }
+            sw.Stop();
+            Debug.Log($"[MaterialManager] 텍스처 {result.Count}/{toLoad.Count}장 GPU처리 {sw.ElapsedMilliseconds}ms");
 
             return result;
         }
 
         /// <summary>
-        /// 로컬 파일에서 Texture2D 로드. MaxPreviewSize 초과 시 다운샘플.
-        /// File.ReadAllBytes + LoadImage 방식으로 OOM 위험 최소화.
+        /// 읽어온 바이트 배열을 Texture2D로 변환. MaxPreviewSize 초과 시 다운샘플.
+        /// 메인 스레드에서만 호출 가능 (LoadImage, Graphics.Blit, ReadPixels).
         /// </summary>
-        private static async Task<Texture2D> LoadTextureFromFileAsync(string filePath)
+        private static Texture2D ProcessTextureBytes(string filePath, byte[] bytes)
         {
-            byte[] bytes;
-            try
-            {
-                bytes = await Task.Run(() => File.ReadAllBytes(filePath));
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[MaterialManager] 파일 읽기 실패: {filePath} — {ex.Message}");
-                return null;
-            }
-
             // PSD 파일은 LoadImage()가 지원 안 됨 → 전용 파서 사용
             if (filePath.EndsWith(".psd", StringComparison.OrdinalIgnoreCase))
             {
@@ -595,6 +615,19 @@ namespace VirtualDresser.Runtime
 
             tex.Apply();
             return tex;
+        }
+
+        // 이전 단일 파일 로드 함수 — 외부에서 개별 로드 필요 시 사용
+        private static async Task<Texture2D> LoadTextureFromFileAsync(string filePath)
+        {
+            byte[] bytes;
+            try { bytes = await Task.Run(() => File.ReadAllBytes(filePath)); }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MaterialManager] 파일 읽기 실패: {filePath} — {ex.Message}");
+                return null;
+            }
+            return ProcessTextureBytes(filePath, bytes);
         }
 
         // ─── PSD 파서 (merged composite, 8-bit RGB/RGBA) ───

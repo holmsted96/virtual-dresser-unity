@@ -180,12 +180,190 @@ namespace VirtualDresser.UI
         private void SubscribeElectronBridge()
         {
             ElectronBridge.OnMessage += OnElectronMessage;
-            Debug.Log("[DresserUI] ElectronBridge.OnMessage 구독 완료");
+            WebViewBridge.OnMessage  += OnElectronMessage;
+            Debug.Log("[DresserUI] ElectronBridge + WebViewBridge OnMessage 구독 완료");
         }
 
         private void OnDestroy()
         {
             ElectronBridge.OnMessage -= OnElectronMessage;
+            WebViewBridge.OnMessage  -= OnElectronMessage;
+        }
+
+        // ─── 좌하단 포즈/카메라 오버레이 (WebView 모드에서 UIDocument 대신 OnGUI 사용) ───
+        // 우측 패널의 White+Blue 테마와 통일: 흰 배경, 파란 hover, 부드러운 색 전환
+
+        private bool _webViewMode = false;
+
+        // 버튼별 hover 애니메이션 t값 (0=기본, 1=hover 완료)
+        private readonly float[] _overlayHover = new float[4];
+
+        // 텍스처 캐시
+        private Texture2D _texWhite;
+
+        // GUIStyle 캐시
+        private GUIStyle _styBtn;
+
+        // 스타일/텍스처 초기화 여부
+        private bool _guiReady;
+
+        private void Update()
+        {
+            if (!_webViewMode && WebViewBridge.Instance != null)
+                _webViewMode = true;
+
+            // hover lerp — 매 프레임 delta로 부드럽게 0↔1 이동
+            if (_webViewMode)
+            {
+                float dt   = Time.unscaledDeltaTime;
+                float spd  = 6f;
+                var   mPos = new Vector2(UnityEngine.Input.mousePosition.x,
+                                         Screen.height - UnityEngine.Input.mousePosition.y);
+                var rects  = GetOverlayRects();
+                for (int i = 0; i < 4; i++)
+                {
+                    bool over = rects[i].Contains(mPos);
+                    _overlayHover[i] = Mathf.Clamp01(_overlayHover[i] + (over ? spd : -spd) * dt);
+                }
+            }
+        }
+
+        // 버튼 Rect 계산 (Update + OnGUI에서 공유)
+        private Rect[] GetOverlayRects()
+        {
+            int btnW = 80, btnH = 30, gap = 5, padX = 14, padY = 16;
+            int y    = Screen.height - btnH - padY;
+            var rs   = new Rect[4];
+            for (int i = 0; i < 4; i++)
+                rs[i] = new Rect(padX + i * (btnW + gap), y, btnW, btnH);
+            return rs;
+        }
+
+        private void EnsureGuiReady()
+        {
+            if (_guiReady) return;
+            _guiReady = true;
+
+            // 단색 텍스처 생성
+            _texWhite = new Texture2D(1, 1);
+            _texWhite.SetPixel(0, 0, Color.white);
+            _texWhite.Apply();
+
+            // 기본 스타일 (흰 배경, 회청색 텍스트)
+            _styBtn = new GUIStyle(GUI.skin.button)
+            {
+                fontSize  = 11,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                border    = new RectOffset(4, 4, 4, 4),
+            };
+            _styBtn.normal.background  = _texWhite;
+            _styBtn.normal.textColor   = new Color(0.16f, 0.24f, 0.42f); // --text2
+            _styBtn.hover.background   = _texWhite;
+            _styBtn.hover.textColor    = new Color(0.15f, 0.39f, 0.92f); // --blue
+            _styBtn.active.background  = _texWhite;
+            _styBtn.active.textColor   = new Color(0.11f, 0.28f, 0.72f);
+            _styBtn.focused.background = _texWhite;
+        }
+
+        private void OnGUI()
+        {
+            if (!_webViewMode) return;
+            if (_poseController == null) return;   // 아바타 로드 전엔 표시 안 함
+
+            EnsureGuiReady();
+
+            var rects  = GetOverlayRects();
+
+            // 색상 상수 (우측 패널 토큰과 동일)
+            var cBg     = new Color(1f, 1f, 1f, 0.97f);           // --bg  white
+            var cBgHov  = new Color(0.94f, 0.96f, 1.00f, 1.00f);  // --bg3 #eaf0ff
+            var cBorder = new Color(0.60f, 0.74f, 0.97f, 0.55f);  // --line2
+            var cBorHov = new Color(0.15f, 0.39f, 0.92f, 0.80f);  // --blue
+            var cAccent = new Color(0.15f, 0.39f, 0.92f, 1.00f);  // --blue (왼쪽 라인)
+            var cTxt    = new Color(0.16f, 0.24f, 0.42f, 1.00f);  // --text2
+            var cTxtHov = new Color(0.15f, 0.39f, 0.92f, 1.00f);  // --blue
+            var cShadow = new Color(0.00f, 0.00f, 0.00f, 0.06f);  // 박스 드롭섀도
+
+            string[] labels  = { "T-Pose", "A-Pose", "Arms Up", "\u21ba Reset View" };
+
+            // ── 컨테이너 배경 (카드) ──────────────────────
+            int padX = 14, padY = 16, gap = 5, btnW = 80, btnH = 30;
+            float totalW = 4 * btnW + 3 * gap;
+            float bx = padX - 8f, by = Screen.height - btnH - padY - 8f;
+            float bw = totalW + 16f, bh = btnH + 16f;
+
+            // 드롭섀도 (살짝 아래 오프셋)
+            GUI.color = cShadow;
+            GUI.DrawTexture(new Rect(bx + 2, by + 3, bw, bh), _texWhite);
+            // 흰 카드
+            GUI.color = cBg;
+            GUI.DrawTexture(new Rect(bx, by, bw, bh), _texWhite);
+            // 상단 얇은 파란 라인 (패널 accent-line 모티프)
+            GUI.color = cAccent;
+            GUI.DrawTexture(new Rect(bx, by, bw, 2f), _texWhite);
+            GUI.color = Color.white;
+
+            // ── 버튼 4개 ──────────────────────────────────
+            bool clicked = false; int clickIdx = -1;
+
+            for (int i = 0; i < 4; i++)
+            {
+                float t   = _overlayHover[i];
+                var   r   = rects[i];
+
+                // 버튼 배경 보간
+                Color bg  = Color.Lerp(cBg, cBgHov, t);
+                Color bor = Color.Lerp(cBorder, cBorHov, t);
+                Color txt = Color.Lerp(cTxt, cTxtHov, t);
+
+                // 테두리
+                float bth = 1f;
+                GUI.color = bor;
+                GUI.DrawTexture(new Rect(r.x - bth, r.y - bth, r.width + bth*2, r.height + bth*2), _texWhite);
+
+                // 버튼 본체
+                GUI.color = bg;
+                GUI.DrawTexture(r, _texWhite);
+
+                // hover 시 왼쪽 파란 수직 라인 (패널 pose-btn::after 모티프)
+                if (t > 0.01f)
+                {
+                    float accentH = r.height * t;
+                    float accentY = r.y + (r.height - accentH) * 0.5f;
+                    GUI.color = new Color(cAccent.r, cAccent.g, cAccent.b, t);
+                    GUI.DrawTexture(new Rect(r.x, accentY, 3f, accentH), _texWhite);
+                }
+
+                // 텍스트
+                GUI.color = txt;
+                _styBtn.normal.textColor = txt;
+                GUI.Label(r, labels[i], _styBtn);
+
+                // 클릭 감지
+                GUI.color = Color.clear;
+                if (GUI.Button(r, GUIContent.none, GUIStyle.none))
+                {
+                    clicked = true; clickIdx = i;
+                }
+            }
+
+            GUI.color = Color.white;
+
+            // ── 클릭 처리 ──────────────────────────────────
+            if (clicked)
+            {
+                switch (clickIdx)
+                {
+                    case 0: _poseController?.ApplyTPose();  break;
+                    case 1: _poseController?.ApplyAPose();  break;
+                    case 2: _poseController?.ApplyArmsUp(); break;
+                    case 3:
+                        var cc = UnityEngine.Object.FindObjectOfType<VirtualDresser.Runtime.CameraController>();
+                        cc?.ResetView();
+                        break;
+                }
+            }
         }
 
         private void OnElectronMessage(string type, object raw)
@@ -231,9 +409,87 @@ namespace VirtualDresser.UI
                     break;
                 case "setMeshVisible":
                     var meshName = ExtractJsonString(json, "name");
-                    var visibleStr = ExtractJsonString(json, "visible");
+                    // visible은 JSON boolean (따옴표 없음) → ExtractNumberField로 raw 값 읽기
+                    var visibleRaw = ExtractNumberField(json, "visible");
+                    if (string.IsNullOrEmpty(visibleRaw))
+                        visibleRaw = json.Contains("\"visible\":true") ? "true" : "false";
                     if (!string.IsNullOrEmpty(meshName))
-                        SetMeshVisibleByName(meshName, visibleStr == "true");
+                        SetMeshVisibleByName(meshName, visibleRaw == "true");
+                    break;
+
+                case "deleteMesh":
+                    var delMeshName = ExtractJsonString(json, "name");
+                    if (!string.IsNullOrEmpty(delMeshName))
+                        DeleteMeshByName(delMeshName);
+                    break;
+
+                case "setMaterialColor":
+                    // { type, meshName, matIndex, color: "#rrggbb" }
+                    var mcMesh  = ExtractJsonString(json, "meshName");
+                    var mcColor = ExtractJsonString(json, "color");
+                    var mcIdxStr = ExtractJsonString(json, "matIndex");
+                    if (!string.IsNullOrEmpty(mcMesh) && !string.IsNullOrEmpty(mcColor))
+                    {
+                        int matIdx = 0;
+                        int.TryParse(mcIdxStr, out matIdx);
+                        SetMeshMaterialColorByName(mcMesh, matIdx, mcColor);
+                    }
+                    break;
+
+                case "setTransform":
+                    // { type, name, pos:{x,y,z}, rot:{x,y,z}, scale:{x,y,z} }
+                    var txMesh = ExtractJsonString(json, "name");
+                    if (!string.IsNullOrEmpty(txMesh))
+                        SetMeshTransformByName(txMesh, json);
+                    break;
+
+                case "setPose":
+                    var pose = ExtractJsonString(json, "pose");
+                    switch (pose)
+                    {
+                        case "tpose":  _poseController?.ApplyTPose();  break;
+                        case "apose":  _poseController?.ApplyAPose();  break;
+                        case "armsup": _poseController?.ApplyArmsUp(); break;
+                    }
+                    break;
+
+                case "resetCamera":
+                    var camCtrl2 = UnityEngine.Object.FindObjectOfType<VirtualDresser.Runtime.CameraController>();
+                    camCtrl2?.ResetView();
+                    break;
+
+                case "selectMesh":
+                    var selName = ExtractJsonString(json, "name");
+                    if (!string.IsNullOrEmpty(selName))
+                    {
+                        var selEntry = _meshGroups.SelectMany(g => g.Entries)
+                            .FirstOrDefault(e => e.MeshName == selName);
+                        if (selEntry != null)
+                        {
+                            SetSelectedEntry(selEntry);
+                            SendMeshSelectedToReact(selEntry);
+                        }
+                    }
+                    else
+                    {
+                        SetSelectedEntry(null);
+                    }
+                    break;
+
+                case "setBlendShape":
+                    // { type, meshName, index, value }
+                    var bsMesh  = ExtractJsonString(json, "meshName");
+                    var bsIdxStr = ExtractJsonString(json, "index");
+                    var bsValStr = ExtractJsonString(json, "value");
+                    // value는 숫자라 따옴표 없음 → 별도 파싱
+                    if (string.IsNullOrEmpty(bsValStr))
+                        bsValStr = ExtractNumberField(json, "value");
+                    if (!string.IsNullOrEmpty(bsMesh) && int.TryParse(bsIdxStr, out int bsIdx)
+                        && float.TryParse(bsValStr, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float bsVal))
+                    {
+                        SetBlendShapeByMeshName(bsMesh, bsIdx, bsVal);
+                    }
                     break;
             }
         }
@@ -249,6 +505,31 @@ namespace VirtualDresser.UI
             return end < 0 ? "" : json.Substring(start, end - start);
         }
 
+        // "field": 123.45  (따옴표 없는 숫자값 파싱)
+        private static string ExtractNumberField(string json, string field)
+        {
+            var key = $"\"{field}\":";
+            var idx = json.IndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return "";
+            var start = idx + key.Length;
+            while (start < json.Length && json[start] == ' ') start++;
+            var end = start;
+            while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-' || json[end] == '.')) end++;
+            return json.Substring(start, end - start);
+        }
+
+        private void SetBlendShapeByMeshName(string meshName, int index, float value)
+        {
+            foreach (var group in _meshGroups)
+            {
+                var entry = group.Entries.FirstOrDefault(e => e.MeshName == meshName);
+                if (entry?.Renderer == null) continue;
+                if (index >= 0 && index < entry.Renderer.sharedMesh.blendShapeCount)
+                    entry.Renderer.SetBlendShapeWeight(index, value);
+                return;
+            }
+        }
+
         private void SetMeshVisibleByName(string meshName, bool visible)
         {
             foreach (var group in _meshGroups)
@@ -262,6 +543,124 @@ namespace VirtualDresser.UI
                     return;
                 }
             }
+        }
+
+        private void DeleteMeshByName(string meshName)
+        {
+            foreach (var group in _meshGroups)
+            {
+                var entry = group.Entries.FirstOrDefault(e => e.MeshName == meshName);
+                if (entry != null)
+                {
+                    DeleteMesh(entry);
+                    // 선택된 메쉬가 삭제된 경우 선택 해제
+                    if (_selectedEntry == entry)
+                    {
+                        _meshSelector?.Deselect();
+                        SetSelectedEntry(null);
+                    }
+                    return;
+                }
+            }
+        }
+
+        // ── React에 선택된 메쉬 정보 전송 ──
+        private void SendMeshSelectedToReact(MeshEntry entry)
+        {
+            if (entry == null)
+            {
+                BridgeSendJson("{\"type\":\"meshSelected\",\"name\":\"\",\"materials\":[],\"blendShapes\":[]}");
+                return;
+            }
+
+            // 머티리얼 목록
+            var mats = entry.Renderer?.sharedMaterials ?? System.Array.Empty<Material>();
+            var matParts = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < mats.Length; i++)
+            {
+                var mat = mats[i];
+                if (mat == null) continue;
+                Color c = GetMatColor(mat);
+                string hex = $"#{Mathf.RoundToInt(c.r*255):X2}{Mathf.RoundToInt(c.g*255):X2}{Mathf.RoundToInt(c.b*255):X2}";
+                string matName = mat.name.Replace("\\","\\\\").Replace("\"","\\\"");
+                matParts.Add($"{{\"index\":{i},\"name\":\"{matName}\",\"color\":\"{hex}\"}}");
+            }
+
+            // 블렌드쉐이프 목록 (전체, 현재 weight 포함)
+            var bsParts = new System.Collections.Generic.List<string>();
+            var smr = entry.Renderer;
+            if (smr != null && smr.sharedMesh != null)
+            {
+                var mesh = smr.sharedMesh;
+                for (int i = 0; i < mesh.blendShapeCount; i++)
+                {
+                    string bsName = mesh.GetBlendShapeName(i).Replace("\\","\\\\").Replace("\"","\\\"");
+                    float w = smr.GetBlendShapeWeight(i);
+                    string wStr = w.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                    bsParts.Add($"{{\"index\":{i},\"name\":\"{bsName}\",\"value\":{wStr}}}");
+                }
+            }
+
+            string meshNameEsc = entry.MeshName.Replace("\\","\\\\").Replace("\"","\\\"");
+            string matsJson = "[" + string.Join(",", matParts) + "]";
+            string bsJson   = "[" + string.Join(",", bsParts)  + "]";
+            BridgeSendJson($"{{\"type\":\"meshSelected\",\"name\":\"{meshNameEsc}\",\"visible\":{(entry.IsVisible?"true":"false")},\"materials\":{matsJson},\"blendShapes\":{bsJson}}}");
+        }
+
+        private void BridgeSendJson(string json)
+        {
+            ElectronBridge.Instance?.SendRaw(json);
+            WebViewBridge.Instance?.SendToJs(json);
+        }
+
+        // ── React → Unity: 머티리얼 컬러 변경 ──
+        private void SetMeshMaterialColorByName(string meshName, int matIndex, string hexColor)
+        {
+            if (!TryParseHex(hexColor, out Color color)) return;
+            foreach (var group in _meshGroups)
+            {
+                var entry = group.Entries.FirstOrDefault(e => e.MeshName == meshName);
+                if (entry?.Renderer == null) continue;
+                var mats = entry.Renderer.sharedMaterials;
+                if (matIndex >= 0 && matIndex < mats.Length && mats[matIndex] != null)
+                    ApplyMatColor(mats[matIndex], color);
+                return;
+            }
+        }
+
+        // ── React → Unity: 트랜스폼 변경 ──
+        private void SetMeshTransformByName(string meshName, string json)
+        {
+            foreach (var group in _meshGroups)
+            {
+                var entry = group.Entries.FirstOrDefault(e => e.MeshName == meshName);
+                if (entry?.Renderer == null) continue;
+                var t = entry.Renderer.transform;
+                float px = ParseFloat(json,"pos","x"), py = ParseFloat(json,"pos","y"), pz = ParseFloat(json,"pos","z");
+                float rx = ParseFloat(json,"rot","x"), ry = ParseFloat(json,"rot","y"), rz = ParseFloat(json,"rot","z");
+                float sx = ParseFloat(json,"scale","x",1), sy = ParseFloat(json,"scale","y",1), sz = ParseFloat(json,"scale","z",1);
+                t.localPosition = new Vector3(px, py, pz);
+                t.localEulerAngles = new Vector3(rx, ry, rz);
+                t.localScale = new Vector3(sx, sy, sz);
+                return;
+            }
+        }
+
+        private static float ParseFloat(string json, string section, string axis, float fallback = 0f)
+        {
+            // 간이 파서: "section":{"x":1.0,...}  or flat "x":1.0
+            var secKey = $"\"{section}\":";
+            var secIdx = json.IndexOf(secKey, StringComparison.Ordinal);
+            string search = secIdx >= 0 ? json.Substring(secIdx) : json;
+            var key = $"\"{axis}\":";
+            var idx = search.IndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return fallback;
+            var start = idx + key.Length;
+            var end   = start;
+            while (end < search.Length && (char.IsDigit(search[end]) || search[end]=='-' || search[end]=='.' )) end++;
+            return end > start && float.TryParse(search.Substring(start, end-start),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : fallback;
         }
 
         private void SubscribeCameraClick()
@@ -686,6 +1085,13 @@ namespace VirtualDresser.UI
                 if (result.AnimClipBonePoses.Count > 0)
                     ApplyAnimClipBonePoses(go, result.AnimClipBonePoses);
 
+                // ── 아바타 자체에 부츠 포함 시 발 블렌드쉐이프 자동 적용 ──
+                if (IsBootsClothing(go))
+                {
+                    Debug.Log("[DresserUI] 아바타 내 부츠 감지 → 발 블렌드쉐이프 적용 시도");
+                    ApplyFootBlendShapeForBoots(go);
+                }
+
                 ShowLoading("Importing Avatar", "Finalizing...", 0.92f);
                 RegisterMeshGroup("avatar", displayName, go);
 
@@ -758,6 +1164,10 @@ namespace VirtualDresser.UI
                             var hidden = MeshCombiner.AutoHideOverlappingMeshes(avatarRoot, go);
                             if (hidden.Count > 0)
                                 Debug.Log($"[DresserUI] 자동 숨김: {string.Join(", ", hidden)}");
+
+                            // 부츠/신발 착용 감지 → Body/Body_base 발 블렌드쉐이프 자동 적용
+                            if (IsBootsClothing(go))
+                                ApplyFootBlendShapeForBoots(avatarRoot?.gameObject);
 
                             // 단일 바디 메시 발 클리핑 힌트
                             var hint = MeshCombiner.GetBodyMeshHint(avatarRoot, go);
@@ -919,26 +1329,26 @@ namespace VirtualDresser.UI
         private void BridgeSendAvatarLoaded(string name, IEnumerable<MeshEntryDto> meshes)
         {
             var list = meshes is IList<MeshEntryDto> l ? l : new System.Collections.Generic.List<MeshEntryDto>(meshes);
-            BridgeSendAvatarLoaded(name, list);
+            ElectronBridge.Instance?.SendAvatarLoaded(name, list);
             WebViewBridge.Instance?.SendAvatarLoaded(name, list);
         }
 
         private void BridgeSendClothingLoaded(string name, IEnumerable<MeshEntryDto> meshes)
         {
             var list = meshes is IList<MeshEntryDto> l ? l : new System.Collections.Generic.List<MeshEntryDto>(meshes);
-            BridgeSendClothingLoaded(name, list);
+            ElectronBridge.Instance?.SendClothingLoaded(name, list);
             WebViewBridge.Instance?.SendClothingLoaded(name, list);
         }
 
-        private void BridgeSendImportProgress(float progress)
+        private void BridgeSendImportProgress(float progress, string title = "", string step = "")
         {
-            BridgeSendImportProgress(progress);
-            WebViewBridge.Instance?.SendImportProgress(progress);
+            ElectronBridge.Instance?.SendImportProgress(progress, title, step);
+            WebViewBridge.Instance?.SendImportProgress(progress, title, step);
         }
 
         private void BridgeSendExportStatus(string status, string log = "")
         {
-            BridgeSendExportStatus(status, log);
+            ElectronBridge.Instance?.SendExportStatus(status, log);
             WebViewBridge.Instance?.SendExportStatus(status, log);
         }
 
@@ -1682,6 +2092,26 @@ namespace VirtualDresser.UI
         ///
         /// 모두 0인 웨이트 배열은 건너뜀 (prefab 기본 상태 = 변경 없음).
         /// </summary>
+        /// <summary>
+        /// GoName 노말라이제이션 헬퍼.
+        /// 아바타 접두사(Avatar_Body_base → Body_base), 숫자 접미사, 언더스코어 트림.
+        /// </summary>
+        private static string NormalizeSmrName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            var lower = name.ToLowerInvariant();
+            // "avatarname_body_base" → "body_base" : 2번째 언더스코어부터 시작하는 경우 처리
+            // 언더스코어 분할 후 "body"/"mesh"/"face"/"hair"/"cloth" 포함 세그먼트부터 시작
+            var parts = lower.Split('_');
+            var bodyKeywords = new[] { "body", "mesh", "face", "hair", "cloth", "base", "skin", "head" };
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (System.Array.Exists(bodyKeywords, k => parts[i].Contains(k)))
+                    return string.Join("_", parts, i, parts.Length - i);
+            }
+            return lower;
+        }
+
         private static void ApplyPrefabBlendShapes(GameObject go, ParseResult parseResult)
         {
             if (parseResult.PrefabSmrDataList.Count == 0) return;
@@ -1689,6 +2119,10 @@ namespace VirtualDresser.UI
             var smrs = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             int applied = 0;
             var assignedSmrs = new HashSet<SkinnedMeshRenderer>();
+
+            // 진단: 씬에 있는 SMR 목록 출력
+            Debug.Log($"[DresserUI] ApplyPrefabBlendShapes: PrefabSmrDataList={parseResult.PrefabSmrDataList.Count}개, " +
+                      $"씬 SMR={smrs.Length}개 [{string.Join(", ", smrs.Select(s => $"{s.name}({s.sharedMesh?.blendShapeCount ?? 0}BS)"))}]");
 
             foreach (var smrData in parseResult.PrefabSmrDataList)
             {
@@ -1703,7 +2137,6 @@ namespace VirtualDresser.UI
                 // ── 1) MeshGuid 기반 매칭 (가장 정확 — FBX GUID로 직접 식별) ──
                 if (target == null && !string.IsNullOrEmpty(smrData.MeshGuid))
                 {
-                    // TriLib 로드된 SMR의 sharedMesh 이름에 guid 일부가 포함되는 경우 대응
                     target = smrs.FirstOrDefault(s =>
                         s.sharedMesh != null &&
                         (s.sharedMesh.name.Contains(smrData.MeshGuid, StringComparison.OrdinalIgnoreCase) ||
@@ -1737,23 +2170,35 @@ namespace VirtualDresser.UI
                             return nameMatch;
                         });
                     }
+
+                    // 5) 노말라이즈 후 매칭 — "AvatarName_Body_base" → "body_base" 로 비교
+                    if (target == null)
+                    {
+                        var normGoName = NormalizeSmrName(smrData.GoName);
+                        target = smrs.FirstOrDefault(s =>
+                        {
+                            if (s.sharedMesh == null) return false;
+                            var normSmr = NormalizeSmrName(s.gameObject.name);
+                            if (!normSmr.Contains(normGoName) && !normGoName.Contains(normSmr)) return false;
+                            if (!isSparse && smrData.BlendShapeWeights != null)
+                                return s.sharedMesh.blendShapeCount >= smrData.BlendShapeWeights.Length;
+                            return true;
+                        });
+                        if (target != null)
+                            Debug.Log($"[DresserUI] Prefab BS 노말라이즈 매칭: '{smrData.GoName}'→'{target.name}'");
+                    }
                 }
 
-                // ── 5) PrefabInstance sparse fallback: 최대 인덱스를 수용하는 SMR ──
+                // ── 6) PrefabInstance sparse fallback: 최대 인덱스를 수용하는 SMR ──
                 if (target == null && isSparse)
                 {
                     int maxIdx = smrData.SparseWeights.Keys.Max();
-
-                    // GoName이 null이거나, GoName이 있어도 scene에서 이미 못 찾은 경우
-                    // → 외부 패키지(신발 등)가 아바타 바디 SMR을 직접 수정하는 크로스패키지 케이스로 판단
                     bool crossPackage = string.IsNullOrEmpty(smrData.GoName);
-
                     var candidates = smrs.Where(s => s.sharedMesh != null
                                                   && s.sharedMesh.blendShapeCount > maxIdx);
 
                     if (crossPackage)
                     {
-                        // 블렌드쉐이프 수 내림차순 — 아바타 바디 메시가 가장 많음
                         target = candidates
                             .OrderByDescending(s => s.sharedMesh.blendShapeCount)
                             .FirstOrDefault();
@@ -1762,7 +2207,6 @@ namespace VirtualDresser.UI
                     }
                     else
                     {
-                        // 같은 패키지 내: 미할당 중 가장 작은 것 (기존 로직)
                         target = candidates
                             .Where(s => !assignedSmrs.Contains(s))
                             .OrderBy(s => s.sharedMesh.blendShapeCount)
@@ -1771,8 +2215,6 @@ namespace VirtualDresser.UI
                             .OrderBy(s => s.sharedMesh.blendShapeCount)
                             .FirstOrDefault();
 
-                        // 그래도 못 찾으면: GoName이 있지만 scene에 없는 경우
-                        // → 이 패키지가 다른 패키지(아바타) SMR을 수정하는 케이스
                         if (target == null)
                         {
                             target = smrs.Where(s => s.sharedMesh != null
@@ -1785,68 +2227,106 @@ namespace VirtualDresser.UI
                     }
                 }
 
-                // ── 6) dense fallback: 블렌드쉐이프 개수 정확 일치 ──
+                // ── 7) dense fallback: 블렌드쉐이프 개수 기반 ──
                 if (target == null && !isSparse && smrData.BlendShapeWeights != null)
                 {
-                    // 정확 일치 우선
+                    int arrLen = smrData.BlendShapeWeights.Length;
+
+                    // 7a) 정확 일치 우선
                     target = smrs.FirstOrDefault(s =>
                         s.sharedMesh != null &&
-                        s.sharedMesh.blendShapeCount == smrData.BlendShapeWeights.Length &&
+                        s.sharedMesh.blendShapeCount == arrLen &&
                         !assignedSmrs.Contains(s));
-                    // 없으면 개수 포함(>=) 중 가장 작은 것
+
+                    // 7b) 없으면 개수 포함(>=) 중 가장 작은 것
                     if (target == null)
                         target = smrs
                             .Where(s => s.sharedMesh != null &&
-                                        s.sharedMesh.blendShapeCount >= smrData.BlendShapeWeights.Length &&
+                                        s.sharedMesh.blendShapeCount >= arrLen &&
                                         !assignedSmrs.Contains(s))
                             .OrderBy(s => s.sharedMesh.blendShapeCount)
                             .FirstOrDefault();
+
+                    // 7c) assignedSmrs 제약 풀고 단 하나만 있으면 그걸 사용
+                    if (target == null)
+                    {
+                        var singleCandidates = smrs.Where(s =>
+                            s.sharedMesh != null && s.sharedMesh.blendShapeCount >= arrLen).ToList();
+                        if (singleCandidates.Count == 1)
+                        {
+                            target = singleCandidates[0];
+                            Debug.Log($"[DresserUI] dense BS 단일후보 강제매칭: '{target.name}' (BS수={target.sharedMesh.blendShapeCount}, 배열길이={arrLen})");
+                        }
+                    }
                 }
 
                 if (target == null)
                 {
-                    Debug.LogWarning($"[DresserUI] Prefab 블렌드쉐이프 매칭 실패: GoName='{smrData.GoName}' " +
-                                     $"MeshGuid='{smrData.MeshGuid}' isSparse={isSparse} " +
-                                     $"검색된SMR={smrs.Length}개 (maxIdx={( isSparse ? smrData.SparseWeights.Keys.Max().ToString() : "-")})");
+                    var nonZeroCount = !isSparse
+                        ? (smrData.BlendShapeWeights?.Count(w => w != 0f) ?? 0)
+                        : smrData.SparseWeights.Count;
+                    Debug.LogWarning($"[DresserUI] Prefab BS 매칭 실패: GoName='{smrData.GoName}' " +
+                                     $"MeshGuid='{smrData.MeshGuid}' isSparse={isSparse} nonZero={nonZeroCount} " +
+                                     $"씬SMR=[{string.Join(",", smrs.Select(s => $"{s.name}({s.sharedMesh?.blendShapeCount ?? 0})"))}]");
                     continue;
                 }
 
                 // ── 웨이트 적용 ──
                 string[] debugEntries;
+                // 인덱스→이름 역매핑 (이름 기반 전파용)
+                var resolvedByName = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+
                 if (isSparse)
                 {
                     // SparseWeights: 인덱스 → 값 직접 적용
                     foreach (var kv in smrData.SparseWeights)
                     {
                         if (kv.Key < target.sharedMesh.blendShapeCount)
-                            target.SetBlendShapeWeight(kv.Key, kv.Value);
-                    }
-                    debugEntries = smrData.SparseWeights
-                        .OrderBy(kv => kv.Key)
-                        .Take(5)
-                        .Select(kv =>
                         {
-                            var shapeName = kv.Key < target.sharedMesh.blendShapeCount
-                                ? target.sharedMesh.GetBlendShapeName(kv.Key) : kv.Key.ToString();
-                            return $"{shapeName}={kv.Value}";
-                        }).ToArray();
+                            target.SetBlendShapeWeight(kv.Key, kv.Value);
+                            var bsName = target.sharedMesh.GetBlendShapeName(kv.Key);
+                            resolvedByName[bsName] = kv.Value;
+                        }
+                    }
+                    debugEntries = resolvedByName
+                        .Take(5)
+                        .Select(kv => $"{kv.Key}={kv.Value}")
+                        .ToArray();
                 }
                 else
                 {
                     var count = Mathf.Min(smrData.BlendShapeWeights.Length,
                                           target.sharedMesh.blendShapeCount);
                     for (int i = 0; i < count; i++)
+                    {
                         target.SetBlendShapeWeight(i, smrData.BlendShapeWeights[i]);
+                        if (smrData.BlendShapeWeights[i] != 0f)
+                            resolvedByName[target.sharedMesh.GetBlendShapeName(i)] = smrData.BlendShapeWeights[i];
+                    }
 
-                    debugEntries = Enumerable.Range(0, count)
-                        .Where(i => smrData.BlendShapeWeights[i] != 0f)
+                    debugEntries = resolvedByName
                         .Take(5)
-                        .Select(i =>
+                        .Select(kv => $"{kv.Key}={kv.Value}")
+                        .ToArray();
+                }
+
+                // ── 이름 기반 전파: 같은 블렌드쉐이프 이름을 가진 다른 SMR에도 동기화 ──
+                // (아바타가 바디 메시를 여러 파트로 분할한 경우 커버, cross-package 시 특히 유효)
+                if (resolvedByName.Count > 0 && string.IsNullOrEmpty(smrData.GoName))
+                {
+                    foreach (var otherSmr in smrs)
+                    {
+                        if (otherSmr == target || otherSmr.sharedMesh == null) continue;
+                        foreach (var kv in resolvedByName)
                         {
-                            var shapeName = i < target.sharedMesh.blendShapeCount
-                                ? target.sharedMesh.GetBlendShapeName(i) : i.ToString();
-                            return $"{shapeName}={smrData.BlendShapeWeights[i]}";
-                        }).ToArray();
+                            int idx = otherSmr.sharedMesh.GetBlendShapeIndex(kv.Key);
+                            if (idx >= 0)
+                            {
+                                otherSmr.SetBlendShapeWeight(idx, kv.Value);
+                                Debug.Log($"[DresserUI] BS 이름전파: {otherSmr.name}.{kv.Key}={kv.Value}");
+                            }
+                        }
+                    }
                 }
 
                 assignedSmrs.Add(target);
@@ -1884,16 +2364,31 @@ namespace VirtualDresser.UI
                 var mesh = smr.sharedMesh;
                 if (mesh == null || mesh.blendShapeCount == 0) continue;
 
-                // GO 이름 또는 경로 끝 이름으로 매칭
                 Dictionary<string, float> bsMap = null;
-                var goNameLow = smr.gameObject.name.ToLowerInvariant();
+
+                // 1단계: 정확 일치
                 foreach (var kv in defaults)
                 {
                     if (string.Equals(kv.Key, smr.gameObject.name, StringComparison.OrdinalIgnoreCase))
+                    { bsMap = kv.Value; break; }
+                }
+
+                // 2단계: 정규화 부분 일치 ("Body_base" ↔ "body", "Moe_Body" ↔ "Body")
+                if (bsMap == null)
+                {
+                    var normSmr = NormalizeSmrName(smr.gameObject.name);
+                    foreach (var kv in defaults)
                     {
-                        bsMap = kv.Value; break;
+                        var normKey = NormalizeSmrName(kv.Key);
+                        if (normSmr == normKey || normSmr.Contains(normKey) || normKey.Contains(normSmr))
+                        {
+                            bsMap = kv.Value;
+                            Debug.Log($"[DresserUI] AnimClip BS 퍼지매칭: prefab='{kv.Key}' → SMR='{smr.gameObject.name}'");
+                            break;
+                        }
                     }
                 }
+
                 if (bsMap == null) continue;
 
                 int applied = 0;
@@ -1927,6 +2422,127 @@ namespace VirtualDresser.UI
         /// AnimationClip Transform 커브에서 추출한 본 포즈를 아바타에 적용.
         /// 힐 착용 시 발 각도 등 bone-driven 포즈 보정에 사용.
         /// </summary>
+        private static void ApplyHeelRotationToFootBones(GameObject go, float[] rot)
+        {
+            // rot = [x, y, z, w] from prefab m_LocalRotation (Unity native FBX importer space)
+            // ⚠️ TriLib은 Unity 네이티브 임포터와 발 뼈 좌표계가 다름 (TriLib before ≈ (-109°,0°,185°) euler)
+            // 절대값 치환이 아닌 상대 곱셈 방식: TriLib 기준 local X축으로 -90° 회전 추가
+            // prefab 힐 Q가 ≈ -90° around X 이므로 동일한 local X delta를 현재 회전에 곱함
+            var heelQ = new UnityEngine.Quaternion(rot[0], rot[1], rot[2], rot[3]);
+            // delta: 현재 TriLib 발 로컬 기준으로 얼마만큼 회전할지 (heelQ를 그대로 delta로 사용)
+            int count = 0;
+            foreach (var t in go.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name.IndexOf("foot", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    var before = t.localRotation;
+                    // 상대 적용: 현재 회전 * 힐 delta (local 공간 우측 곱셈)
+                    t.localRotation = t.localRotation * heelQ;
+                    var after = t.localRotation;
+                    Debug.Log($"[DresserUI] 힐 회전 적용(상대): '{t.name}'\n  before=({before.x:F3},{before.y:F3},{before.z:F3},{before.w:F3})\n  after =({after.x:F3},{after.y:F3},{after.z:F3},{after.w:F3})");
+                    count++;
+                }
+            }
+            if (count == 0)
+                Debug.LogWarning("[DresserUI] 힐 회전 적용 실패: 'foot' 포함 본 없음");
+        }
+
+        /// <summary>
+        /// 부츠/신발 의상인지 판단 — SMR 이름에 "boot"/"shoe"/"shoes"가 포함되면 true
+        /// </summary>
+        private static bool IsBootsClothing(GameObject clothingGo)
+        {
+            if (clothingGo == null) return false;
+            foreach (var smr in clothingGo.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var n = smr.name;
+                if (n.IndexOf("boot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    n.IndexOf("shoe", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 부츠/신발 착용 시 아바타 바디 메시의 Shrink_Foot / Shrink_Ankle / Shrink_Toe 계열 블렌드쉐이프를 100으로 설정.
+        /// 형태 변형(toe_heels, toe_highheels 등) 블렌드쉐이프는 적용하지 않음 (뚫림 악화).
+        /// 바디 메시 탐지: body/base 키워드 포함 SMR 우선, 없으면 블렌드쉐이프 수 상위 SMR.
+        /// </summary>
+        private static void ApplyFootBlendShapeForBoots(GameObject avatarGo)
+        {
+            if (avatarGo == null) return;
+
+            // Shrink 계열 패턴 (toe/heel/nail 등 형태 변형 제외)
+            var shrinkPatterns = new[] { "shrink_foot", "shrink_ankle", "shrink_toe", "shrink_nail" };
+            var bodyKeywords   = new[] { "body", "base", "body_base", "skin", "nude" };
+
+            var allSmrs = avatarGo.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+                                  .Where(s => s.sharedMesh != null && s.sharedMesh.blendShapeCount > 0)
+                                  .ToList();
+            if (allSmrs.Count == 0) return;
+
+            // 바디 메시 후보: 키워드 매칭 우선, 없으면 블렌드쉐이프 수 상위 2개
+            var bodySmrs = allSmrs
+                .Where(s => System.Array.Exists(bodyKeywords,
+                    k => s.name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
+                .ToList();
+
+            if (bodySmrs.Count == 0)
+            {
+                // 키워드 없는 경우: 블렌드쉐이프 수 상위 2개를 바디 메시로 간주
+                bodySmrs = allSmrs
+                    .OrderByDescending(s => s.sharedMesh.blendShapeCount)
+                    .Take(2)
+                    .ToList();
+                Debug.Log($"[DresserUI] body 키워드 매칭 실패 → 블렌드쉐이프 수 기준 후보: " +
+                          string.Join(", ", bodySmrs.Select(s => $"{s.name}({s.sharedMesh.blendShapeCount})")));
+            }
+
+            int total = 0;
+            bool loggedOnce = false;
+            foreach (var smr in bodySmrs)
+            {
+                var mesh = smr.sharedMesh;
+
+                // 진단: 바디 메시 전체 블렌드쉐이프 목록 (처음 한 번)
+                if (!loggedOnce && mesh.blendShapeCount > 0)
+                {
+                    loggedOnce = true;
+                    var names = new System.Text.StringBuilder();
+                    for (int bi = 0; bi < mesh.blendShapeCount; bi++)
+                        names.Append(mesh.GetBlendShapeName(bi)).Append(", ");
+                    Debug.Log($"[DresserUI] {smr.name} BS {mesh.blendShapeCount}개: {names}");
+                }
+
+                for (int bi = 0; bi < mesh.blendShapeCount; bi++)
+                {
+                    var shapeName = mesh.GetBlendShapeName(bi);
+                    bool isShrink = System.Array.Exists(shrinkPatterns,
+                        k => shapeName.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (!isShrink) continue;
+
+                    // prefab 파싱이 이미 값을 설정했으면 존중, 아직 0이면 fallback으로 100 설정
+                    var current = smr.GetBlendShapeWeight(bi);
+                    if (current == 0f)
+                    {
+                        smr.SetBlendShapeWeight(bi, 100f);
+                        Debug.Log($"[DresserUI] 발 shrink fallback: {smr.name}.{shapeName} = 100 (prefab 미적용)");
+                    }
+                    else
+                    {
+                        Debug.Log($"[DresserUI] 발 shrink 유지: {smr.name}.{shapeName} = {current} (prefab 적용됨)");
+                    }
+                    total++;
+                }
+            }
+
+            if (total == 0)
+                Debug.LogWarning("[DresserUI] 발 shrink BS 없음 — 바디 메시 후보: " +
+                                 string.Join(", ", bodySmrs.Select(s => s.name)));
+            else
+                Debug.Log($"[DresserUI] 발 블렌드쉐이프 총 {total}개 적용 완료");
+        }
+
         private static void ApplyAnimClipBonePoses(GameObject go, Dictionary<string, UnityEngine.Vector3> bonePoses)
         {
             // 아바타 전체 Transform을 이름 기준으로 인덱싱
@@ -2092,6 +2708,9 @@ namespace VirtualDresser.UI
         {
             _selectedEntry = entry;
             RefreshInspectorPanel();
+
+            // React/Electron UI로도 선택 상태 전송
+            SendMeshSelectedToReact(entry);
 
             // 메쉬 패널에서도 해당 항목 하이라이트 갱신
             RefreshMeshPanel();
@@ -2785,81 +3404,82 @@ namespace VirtualDresser.UI
 
         private void CreateLoadingOverlay()
         {
-            // 전체 화면 반투명 배경
+            // 전체 화면 반투명 블러 배경 (WebView는 오른쪽 340px만 → 왼쪽 뷰포트 위에 표시)
             _loadingOverlay = new VisualElement();
             _loadingOverlay.style.position        = Position.Absolute;
             _loadingOverlay.style.top             = 0;
             _loadingOverlay.style.left            = 0;
             _loadingOverlay.style.width           = new StyleLength(new Length(100, LengthUnit.Percent));
             _loadingOverlay.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
-            _loadingOverlay.style.backgroundColor = new Color(0.02f, 0.05f, 0.12f, 0.88f); // #0b1120 tinted
+            _loadingOverlay.style.backgroundColor = new Color(0.04f, 0.04f, 0.08f, 0.82f);
             _loadingOverlay.style.alignItems      = Align.Center;
             _loadingOverlay.style.justifyContent  = Justify.Center;
             _loadingOverlay.style.display         = DisplayStyle.None;
-            _loadingOverlay.pickingMode           = PickingMode.Position; // 클릭 차단
+            _loadingOverlay.pickingMode           = PickingMode.Position;
 
             // 중앙 카드
             var card = new VisualElement();
-            card.style.backgroundColor = new Color(0.067f, 0.122f, 0.208f, 1f); // #111f35
-            card.style.borderTopLeftRadius     = 10;
-            card.style.borderTopRightRadius    = 10;
-            card.style.borderBottomLeftRadius  = 10;
-            card.style.borderBottomRightRadius = 10;
-            card.style.borderTopColor          = new Color(0.086f, 0.467f, 1f, 0.2f); // #1677ff 20%
-            card.style.borderBottomColor       = new Color(0.086f, 0.467f, 1f, 0.2f);
-            card.style.borderLeftColor         = new Color(0.086f, 0.467f, 1f, 0.2f);
-            card.style.borderRightColor        = new Color(0.086f, 0.467f, 1f, 0.2f);
+            card.style.backgroundColor         = new Color(0.053f, 0.053f, 0.082f, 1f); // #0d0d14
+            card.style.borderTopLeftRadius     = 12;
+            card.style.borderTopRightRadius    = 12;
+            card.style.borderBottomLeftRadius  = 12;
+            card.style.borderBottomRightRadius = 12;
+            card.style.borderTopColor          = new Color(0.486f, 0.361f, 0.961f, 0.25f); // accent
+            card.style.borderBottomColor       = new Color(0.486f, 0.361f, 0.961f, 0.25f);
+            card.style.borderLeftColor         = new Color(0.486f, 0.361f, 0.961f, 0.25f);
+            card.style.borderRightColor        = new Color(0.486f, 0.361f, 0.961f, 0.25f);
             card.style.borderTopWidth          = 1;
             card.style.borderBottomWidth       = 1;
             card.style.borderLeftWidth         = 1;
             card.style.borderRightWidth        = 1;
-            card.style.paddingTop    = 30;
-            card.style.paddingBottom = 30;
-            card.style.paddingLeft   = 40;
-            card.style.paddingRight  = 40;
+            card.style.paddingTop    = 32;
+            card.style.paddingBottom = 32;
+            card.style.paddingLeft   = 44;
+            card.style.paddingRight  = 44;
             card.style.alignItems    = Align.Center;
-            card.style.width         = 340;
+            card.style.width         = 360;
 
             // 타이틀
             _loadingTitle = new Label("Importing...");
-            _loadingTitle.style.fontSize   = 15;
-            _loadingTitle.style.color      = new Color(1f, 1f, 1f, 0.92f);
-            _loadingTitle.style.marginBottom = 5;
+            _loadingTitle.style.fontSize     = 16;
+            _loadingTitle.style.color        = new Color(0.898f, 0.898f, 0.969f, 1f); // #e5e5f7
+            _loadingTitle.style.marginBottom = 6;
             _loadingTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
 
             // 단계 설명
             _loadingStep = new Label("");
             _loadingStep.style.fontSize     = 11;
-            _loadingStep.style.color        = new Color(0.086f, 0.467f, 1f, 0.65f); // blue-tinted
-            _loadingStep.style.marginBottom = 20;
+            _loadingStep.style.color        = new Color(0.282f, 0.286f, 0.376f, 1f); // --dim
+            _loadingStep.style.marginBottom = 22;
 
             // 게이지 트랙
             var track = new VisualElement();
-            track.style.width           = 280;
-            track.style.height          = 6;
-            track.style.backgroundColor = new Color(1f, 1f, 1f, 0.07f);
-            track.style.borderTopLeftRadius     = 3;
-            track.style.borderTopRightRadius    = 3;
-            track.style.borderBottomLeftRadius  = 3;
-            track.style.borderBottomRightRadius = 3;
+            track.style.width           = 272;
+            track.style.height          = 3;
+            track.style.backgroundColor = new Color(1f, 1f, 1f, 0.06f);
+            track.style.borderTopLeftRadius     = 99;
+            track.style.borderTopRightRadius    = 99;
+            track.style.borderBottomLeftRadius  = 99;
+            track.style.borderBottomRightRadius = 99;
             track.style.marginBottom            = 10;
             track.style.overflow                = Overflow.Hidden;
 
-            // 게이지 채움 (#1677ff)
+            // 게이지 채움 — 보라 그라디언트 (단색으로 대체)
             _progressFill = new VisualElement();
             _progressFill.style.height          = new StyleLength(new Length(100, LengthUnit.Percent));
             _progressFill.style.width           = 0;
-            _progressFill.style.backgroundColor = new Color(0.086f, 0.467f, 1f, 1f); // #1677ff
-            _progressFill.style.borderTopLeftRadius     = 3;
-            _progressFill.style.borderTopRightRadius    = 3;
-            _progressFill.style.borderBottomLeftRadius  = 3;
-            _progressFill.style.borderBottomRightRadius = 3;
+            _progressFill.style.backgroundColor = new Color(0.486f, 0.361f, 0.961f, 1f); // --accent
+            _progressFill.style.borderTopLeftRadius     = 99;
+            _progressFill.style.borderTopRightRadius    = 99;
+            _progressFill.style.borderBottomLeftRadius  = 99;
+            _progressFill.style.borderBottomRightRadius = 99;
             track.Add(_progressFill);
 
             // 퍼센트 텍스트
             _loadingPct = new Label("0%");
-            _loadingPct.style.fontSize = 10;
-            _loadingPct.style.color    = new Color(1f, 1f, 1f, 0.3f);
+            _loadingPct.style.fontSize  = 11;
+            // fontStyle: Unity 2022.2+ 전용, 2021.3에서는 제거
+            _loadingPct.style.color     = new Color(0.655f, 0.545f, 0.980f, 1f); // --accent2
 
             card.Add(_loadingTitle);
             card.Add(_loadingStep);
@@ -2872,25 +3492,35 @@ namespace VirtualDresser.UI
         /// <summary>로딩 오버레이 표시. progress 0.0~1.0</summary>
         private void ShowLoading(string title, string step, float progress)
         {
-            if (_loadingOverlay == null) return;
-            _loadingOverlay.style.display = DisplayStyle.Flex;
-            _loadingTitle.text = title;
-            _loadingStep.text  = step;
+            // WebView가 오른쪽 패널만 차지하므로, 화면 중앙 팝업은 UIDocument로 표시
+            var doc = GetComponent<UnityEngine.UIElements.UIDocument>();
+            if (doc != null) doc.enabled = true;
 
-            int pct = Mathf.RoundToInt(progress * 100f);
-            _loadingPct.text   = $"{pct}%";
-            _progressFill.style.width = new StyleLength(new Length(pct, LengthUnit.Percent));
+            if (_loadingOverlay != null)
+            {
+                _loadingOverlay.style.display = DisplayStyle.Flex;
+                if (_loadingTitle != null) _loadingTitle.text = title;
+                if (_loadingStep  != null) _loadingStep.text  = step;
 
-            // Electron React UI에 진행률 전달
-            BridgeSendImportProgress(progress);
+                int pct = Mathf.RoundToInt(progress * 100f);
+                if (_loadingPct   != null) _loadingPct.text = $"{pct}%";
+                if (_progressFill != null)
+                    _progressFill.style.width = new StyleLength(new Length(pct, LengthUnit.Percent));
+            }
+
+            // title / step 도 React 패널로 전달
+            BridgeSendImportProgress(progress, title, step);
         }
 
         private void HideLoading()
         {
-            if (_loadingOverlay == null) return;
-            _loadingOverlay.style.display = DisplayStyle.None;
-            // Electron UI 게이지 완료 처리 (1.0 → 숨김)
-            BridgeSendImportProgress(1f);
+            if (_loadingOverlay != null)
+                _loadingOverlay.style.display = DisplayStyle.None;
+
+            var doc = GetComponent<UnityEngine.UIElements.UIDocument>();
+            if (doc != null) doc.enabled = false;
+
+            BridgeSendImportProgress(1f, "", "");
         }
 
         private static string LayerDisplayName(string layerKey) => layerKey switch

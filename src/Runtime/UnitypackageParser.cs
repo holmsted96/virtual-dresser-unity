@@ -32,6 +32,11 @@ namespace VirtualDresser.Runtime
         public string TargetAvatar;
         public List<string> ExtractedFbxPaths = new();
         public List<string> ExtractedTextureNames = new();
+        /// <summary>
+        /// .mat 파싱 시 발견된 모든 텍스처 파일명 (lilToon 포함 모든 속성).
+        /// 텍스처 필터링에 사용.
+        /// </summary>
+        public HashSet<string> ReferencedTextureFiles = new(StringComparer.OrdinalIgnoreCase);
         public string TempDirPath;
         /// <summary>
         /// .mat 파싱 결과: 머티리얼 이름 → 텍스처 매핑
@@ -61,6 +66,55 @@ namespace VirtualDresser.Runtime
         /// 루트 본 이름 기준으로 저장됨.
         /// </summary>
         public List<PhysBoneData> PhysBoneDataList = new();
+
+        /// <summary>
+        /// .prefab에서 m_IsActive: 0 인 GameObject 이름 목록.
+        /// 임포트 시 해당 이름의 SMR을 자동으로 숨김 처리.
+        /// </summary>
+        public HashSet<string> InactiveGoNames = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// VRCAvatarDescriptor → FX AnimatorController → 기본 상태 AnimationClip에서 읽은
+        /// 블렌드쉐이프 기본값. GO 경로 끝 이름 → (블렌드쉐이프 이름 → 값).
+        /// TriLib 로드 후 SMR 이름 기준으로 적용.
+        /// </summary>
+        public Dictionary<string, Dictionary<string, float>> AvatarDefaultBlendShapes = new();
+
+        /// <summary>
+        /// AnimationClip m_EulerCurves / m_RotationCurves에서 추출한 본 포즈 오버라이드.
+        /// 본 이름(path 끝 세그먼트) → (x, y, z) Euler 각도.
+        /// TriLib 로드 후 해당 본의 localEulerAngles에 적용 (힐 각도 등).
+        /// </summary>
+        public Dictionary<string, Vector3> AnimClipBonePoses = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 본 이름을 알 수 없는 힐 회전 (fileID 미해결 + 힐 패턴).
+        /// DresserUI에서 아바타 Foot 본을 이름으로 찾아 직접 적용.
+        /// </summary>
+        public float[] UnresolvedHeelRotation; // [x, y, z, w] quaternion, null if none
+
+        /// <summary>
+        /// FBX .meta의 fileIDToRecycleName에서 추출: fileID → 본/오브젝트 이름.
+        /// PrefabInstance m_Modifications의 fileID를 본 이름으로 역매핑할 때 사용.
+        /// </summary>
+        public Dictionary<string, string> FbxFileIdToName = new();
+
+        /// <summary>
+        /// 내부 임시 저장: prefab 파싱 시 수집한 fileID → quaternion[x,y,z,w].
+        /// FBX meta 파싱(1.5패스) 이후 ResolveRotationsToBonePoses()로 이름 매핑 완료.
+        /// </summary>
+        internal Dictionary<string, float[]> _PendingRotationMap = new();
+    }
+
+    /// <summary>
+    /// AnimationClip에서 파싱한 본 포즈 데이터.
+    /// m_EulerCurves의 X/Y/Z 컴포넌트를 별도 파싱 후 조합.
+    /// </summary>
+    public class BonePoseData
+    {
+        public float? X, Y, Z;
+        public Vector3 ToEuler() => new Vector3(X ?? 0f, Y ?? 0f, Z ?? 0f);
+        public bool HasAny => X.HasValue || Y.HasValue || Z.HasValue;
     }
 
     /// <summary>
@@ -184,42 +238,109 @@ namespace VirtualDresser.Runtime
             };
 
             // 백그라운드 스레드에서 tar 스트리밍 (메인 스레드 블로킹 방지)
-            var (guidToPathname, guidToTempAsset, guidToTempMeta) =
+            var (guidToPathname, guidToTempAsset, guidToTempMeta, guidToMemAsset, guidToMemMeta) =
                 await Task.Run(() => StreamTarToDisk(packagePath, tempDir));
 
             result.TotalEntries = guidToPathname.Count;
 
-            // ── 1패스: .mat 파일을 temp 파일에서 읽어 파싱 ──
-            // (.mat asset은 텍스트 YAML이므로 ReadAllText 가능)
-            foreach (var (guid, pathname) in guidToPathname)
+            // ── 헬퍼: guid로 텍스트 읽기 (메모리 우선, 디스크 폴백) ──
+            string ReadAssetText(string guid)
             {
-                if (!Path.GetExtension(pathname).Equals(".mat", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
+                if (guidToMemAsset.TryGetValue(guid, out var bytes))
+                    return Encoding.UTF8.GetString(bytes);
+                if (guidToTempAsset.TryGetValue(guid, out var path))
+                    return File.ReadAllText(path);
+                return null;
+            }
 
-                try
+            // ── 1패스: .mat 파일 파싱 (병렬) ──
+            // 메모리 버퍼 우선 사용 → 디스크 I/O 없이 파싱
+            var matEntries = guidToPathname
+                .Where(kv => Path.GetExtension(kv.Value)
+                    .Equals(".mat", StringComparison.OrdinalIgnoreCase)
+                    && (guidToMemAsset.ContainsKey(kv.Key) || guidToTempAsset.ContainsKey(kv.Key)))
+                .ToList();
+
+            if (matEntries.Count > 0)
+            {
+                var parsedMats = new System.Collections.Concurrent.ConcurrentDictionary<string, MaterialTextures>(
+                    StringComparer.OrdinalIgnoreCase);
+
+                // 모든 .mat에서 참조된 텍스처 파일명 수집용 (thread-safe)
+                var allTexSet = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+                await Task.Run(() =>
+                    System.Threading.Tasks.Parallel.ForEach(matEntries, entry =>
+                    {
+                        var (guid, pathname) = entry;
+                        try
+                        {
+                            string matText;
+                            if (guidToMemAsset.TryGetValue(guid, out var buf))
+                                matText = Encoding.UTF8.GetString(buf);
+                            else if (guidToTempAsset.TryGetValue(guid, out var tmpPath))
+                                matText = File.ReadAllText(tmpPath);
+                            else return;
+
+                            // 스레드별 로컬 세트 → ConcurrentBag에 추가
+                            var localTex  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            var matName   = Path.GetFileNameWithoutExtension(pathname);
+                            var matResult = ParseMatFile(matText, matName, guidToPathname, localTex);
+                            if (matResult != null)
+                                parsedMats[matName] = matResult;
+                            foreach (var t in localTex) allTexSet.Add(t);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[Parser] .mat 읽기 실패: {pathname} — {ex.Message}");
+                        }
+                    })
+                );
+
+                // 참조 텍스처 목록을 ParseResult에 저장
+                foreach (var t in allTexSet) result.ReferencedTextureFiles.Add(t);
+
+                // 결과 병합 + 디스크 임시 파일 삭제 (메모리 버퍼는 GC에 맡김)
+                foreach (var (guid, pathname) in matEntries)
                 {
-                    var matText = File.ReadAllText(tmpPath);
-                    var matResult = ParseMatFile(matText,
-                        Path.GetFileNameWithoutExtension(pathname),
-                        guidToPathname);
-                    if (matResult != null)
-                        result.MaterialTextureMap[Path.GetFileNameWithoutExtension(pathname)] = matResult;
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[Parser] .mat 읽기 실패: {pathname} — {ex.Message}");
-                }
-                finally
-                {
-                    try { File.Delete(tmpPath); } catch { }
-                    guidToTempAsset.Remove(guid);
+                    var matName = Path.GetFileNameWithoutExtension(pathname);
+                    if (parsedMats.TryGetValue(matName, out var matResult))
+                        result.MaterialTextureMap[matName] = matResult;
+                    guidToMemAsset.Remove(guid);
+                    if (guidToTempAsset.TryGetValue(guid, out var tmpPath))
+                    {
+                        try { File.Delete(tmpPath); } catch { }
+                        guidToTempAsset.Remove(guid);
+                    }
                 }
             }
 
             Debug.Log($"[Parser] .mat 파싱 완료: {result.MaterialTextureMap.Count}개");
 
-            // ── 1.2패스: .prefab 파일 파싱 → SkinnedMeshRenderer 블렌드쉐이프 웨이트 추출 ──
+            // ── 1.2패스: .prefab / .controller / .anim 파일 파싱 ──
+            // 메모리 버퍼 우선 사용
+            var guidToTempController = new Dictionary<string, string>(); // guid → temp path (대형)
+            var guidToMemController  = new Dictionary<string, byte[]>();  // guid → mem buf (소형)
+            var guidToTempAnim       = new Dictionary<string, string>();
+            var guidToMemAnim        = new Dictionary<string, byte[]>();
+
+            foreach (var (guid, pathname) in guidToPathname)
+            {
+                var ext = Path.GetExtension(pathname);
+                if (ext.Equals(".controller", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (guidToMemAsset.TryGetValue(guid, out var buf)) guidToMemController[guid] = buf;
+                    else if (guidToTempAsset.TryGetValue(guid, out var p)) guidToTempController[guid] = p;
+                }
+                else if (ext.Equals(".anim", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (guidToMemAsset.TryGetValue(guid, out var buf)) guidToMemAnim[guid] = buf;
+                    else if (guidToTempAsset.TryGetValue(guid, out var p)) guidToTempAnim[guid] = p;
+                }
+            }
+            Debug.Log($"[Parser] animator controller {guidToMemController.Count + guidToTempController.Count}개, " +
+                      $"anim clip {guidToMemAnim.Count + guidToTempAnim.Count}개 발견");
+
             var prefabPaths = guidToPathname
                 .Where(kv => Path.GetExtension(kv.Value)
                     .Equals(".prefab", StringComparison.OrdinalIgnoreCase))
@@ -229,15 +350,20 @@ namespace VirtualDresser.Runtime
 
             foreach (var (guid, pathname) in prefabPaths)
             {
-                if (!guidToTempAsset.TryGetValue(guid, out var tmpPath))
+                string prefabText;
+                string prefabTmpPath = null; // finally에서 디스크 파일 삭제용
+                if (guidToMemAsset.TryGetValue(guid, out var prefabBuf))
+                    prefabText = Encoding.UTF8.GetString(prefabBuf);
+                else if (guidToTempAsset.TryGetValue(guid, out prefabTmpPath))
+                    prefabText = File.ReadAllText(prefabTmpPath);
+                else
                 {
-                    Debug.LogWarning($"[Parser] .prefab temp 파일 없음 (이미 삭제?): {pathname}");
+                    Debug.LogWarning($"[Parser] .prefab 데이터 없음 (이미 삭제?): {pathname}");
                     continue;
                 }
 
                 try
                 {
-                    var prefabText = File.ReadAllText(tmpPath);
                     Debug.Log($"[Parser] .prefab 읽기: {pathname} ({prefabText.Length}자)");
 
                     // 진단: m_BlendShapeWeights 포함 여부 확인
@@ -265,8 +391,16 @@ namespace VirtualDresser.Runtime
                     Debug.Log($"[Parser] .prefab 분석: hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
                               $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
 
-                    var smrDataList = ParsePrefabBlendShapes(prefabText);
+                    var smrDataList = ParsePrefabBlendShapes(prefabText, result._PendingRotationMap);
                     result.PrefabSmrDataList.AddRange(smrDataList);
+
+                    // m_IsActive: 0 인 GO 이름 수집
+                    var inactiveNames = ParsePrefabInactiveGoNames(prefabText);
+                    if (inactiveNames.Count > 0)
+                    {
+                        foreach (var n in inactiveNames) result.InactiveGoNames.Add(n);
+                        Debug.Log($"[Parser] 비활성 GO {inactiveNames.Count}개: {string.Join(", ", inactiveNames)}");
+                    }
 
                     var pbDataList = ParsePrefabPhysBones(prefabText);
                     if (pbDataList.Count > 0)
@@ -274,6 +408,150 @@ namespace VirtualDresser.Runtime
                         result.PhysBoneDataList.AddRange(pbDataList);
                         Debug.Log($"[Parser] PhysBone {pbDataList.Count}개 파싱: " +
                                   string.Join(", ", pbDataList.Select(pb => pb.RootBoneName ?? "(null)")));
+                    }
+
+                    // VRCAvatarDescriptor → FX AnimatorController → 모든 레이어 기본 상태 AnimationClip 체인
+                    if (result.AvatarDefaultBlendShapes.Count == 0) // 첫 번째 성공한 prefab만 사용
+                    {
+                        var fxGuid = ParseFxControllerGuid(prefabText);
+                        string ctrlText = null;
+                        if (fxGuid != null)
+                        {
+                            if (guidToMemController.TryGetValue(fxGuid, out var ctrlBuf))
+                                ctrlText = Encoding.UTF8.GetString(ctrlBuf);
+                            else if (guidToTempController.TryGetValue(fxGuid, out var ctrlTmp))
+                                ctrlText = File.ReadAllText(ctrlTmp);
+                        }
+                        if (ctrlText != null)
+                        {
+                            var clipGuids = ParseAnimatorAllDefaultClipGuids(ctrlText);
+                            Debug.Log($"[Parser] FX 전체 레이어 기본 클립 {clipGuids.Count}개 수집");
+
+                            var merged = new Dictionary<string, Dictionary<string, float>>(StringComparer.OrdinalIgnoreCase);
+                            int missingClips = 0;
+                            foreach (var clipGuid in clipGuids)
+                            {
+                                string animText = null;
+                                if (guidToMemAnim.TryGetValue(clipGuid, out var animBuf))
+                                    animText = Encoding.UTF8.GetString(animBuf);
+                                else if (guidToTempAnim.TryGetValue(clipGuid, out var animTmp))
+                                    animText = File.ReadAllText(animTmp);
+                                if (animText == null)
+                                { missingClips++; continue; }
+                                var bsFromClip = ParseAnimClipBlendShapes(animText);
+                                // 레이어별 결과를 merged에 합산 (나중 레이어가 앞 레이어를 덮어씀)
+                                foreach (var (goName, bsMap) in bsFromClip)
+                                {
+                                    if (!merged.TryGetValue(goName, out var target))
+                                        merged[goName] = target = new Dictionary<string, float>(StringComparer.Ordinal);
+                                    foreach (var (bs, val) in bsMap)
+                                        target[bs] = val;
+                                }
+                            }
+                            if (missingClips > 0)
+                                Debug.Log($"[Parser] FX 클립 {missingClips}개 패키지 내 없음 (외부 에셋)");
+
+                            if (merged.Count > 0)
+                            {
+                                result.AvatarDefaultBlendShapes = merged;
+                                Debug.Log($"[Parser] AnimClip 기본 블렌드쉐이프 {merged.Values.Sum(d => d.Count)}개 " +
+                                          $"({merged.Count}개 SMR): " +
+                                          string.Join(", ", merged.Select(kv =>
+                                              $"{kv.Key}[{string.Join(",", kv.Value.Select(b => $"{b.Key}={b.Value}"))}]")));
+                            }
+                            else
+                                Debug.Log("[Parser] FX AnimClip에서 비zero 블렌드쉐이프 없음 (또는 모두 외부 에셋)");
+                        }
+
+                        // ── fallback: 모든 .anim 파일 스캔 (바디 non-zero 블렌드쉐이프 + Transform 커브 수집) ──
+                        // VRC에서는 SavedParameter로 FX 레이어가 힐 등을 활성화하므로
+                        // default state 체인만으로 잡히지 않는 경우 전체 스캔으로 보완.
+                        int totalAnimCount = guidToMemAnim.Count + guidToTempAnim.Count;
+                        if (totalAnimCount > 0)
+                        {
+                            Debug.Log($"[Parser] 전체 .anim {totalAnimCount}개 스캔 (BS + Transform 커브)");
+                            var allAnimBs    = new Dictionary<string, Dictionary<string, float>>(StringComparer.OrdinalIgnoreCase);
+                            var allBonePoses = new Dictionary<string, BonePoseData>(StringComparer.OrdinalIgnoreCase);
+                            // 얼굴 관련 경로 키워드 (블렌드쉐이프 제외 대상)
+                            var faceKeywords = new[]{ "face", "eye", "mouth", "brow", "tongue", "tear", "blush",
+                                                      "顔", "目", "口", "眉" };
+                            // 발 관련 본 이름 키워드 (Transform 커브 포함 대상)
+                            var footKeywords = new[]{ "foot", "toe", "ankle", "heel",
+                                                      "Foot", "Toe", "Ankle" };
+
+                            // 메모리 버퍼 + 디스크 파일 합산 이터레이션
+                            var allAnimEntries = guidToMemAnim.Keys.Select(g => (g, isMemory: true))
+                                .Concat(guidToTempAnim.Keys.Select(g => (g, isMemory: false)));
+                            foreach (var (animGuid, isMemory) in allAnimEntries)
+                            {
+                                try
+                                {
+                                    var animText = isMemory
+                                        ? Encoding.UTF8.GetString(guidToMemAnim[animGuid])
+                                        : File.ReadAllText(guidToTempAnim[animGuid]);
+
+                                    // ── 블렌드쉐이프 커브 ──
+                                    var bsFromClip = ParseAnimClipBlendShapes(animText);
+                                    foreach (var (goName, bsMap) in bsFromClip)
+                                    {
+                                        bool isFace = System.Array.Exists(faceKeywords,
+                                            k => goName.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
+                                        if (isFace) continue;
+                                        if (!allAnimBs.TryGetValue(goName, out var target))
+                                            allAnimBs[goName] = target = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+                                        foreach (var (bs, val) in bsMap)
+                                        {
+                                            // 블렌드쉐이프 이름 자체가 얼굴 관련이면 제외
+                                            bool bsIsFace = System.Array.Exists(faceKeywords,
+                                                k => bs.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
+                                            if (bsIsFace) continue;
+                                            if (!target.TryGetValue(bs, out var existing) || val > existing)
+                                                target[bs] = val;
+                                        }
+                                    }
+
+                                    // ── Transform(Euler) 커브 — 발/발가락 본만 수집 ──
+                                    var eulerCurves = ParseAnimClipEulerCurves(animText);
+                                    foreach (var (boneName, bpd) in eulerCurves)
+                                    {
+                                        if (!bpd.HasAny) continue;
+                                        bool isFoot = System.Array.Exists(footKeywords,
+                                            k => boneName.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
+                                        if (!isFoot) continue;
+                                        // 더 큰 절댓값 우선 (더 강한 포즈)
+                                        if (!allBonePoses.TryGetValue(boneName, out var existing))
+                                            allBonePoses[boneName] = bpd;
+                                        else
+                                        {
+                                            if (bpd.X.HasValue && (!existing.X.HasValue || Math.Abs(bpd.X.Value) > Math.Abs(existing.X.Value))) existing.X = bpd.X;
+                                            if (bpd.Y.HasValue && (!existing.Y.HasValue || Math.Abs(bpd.Y.Value) > Math.Abs(existing.Y.Value))) existing.Y = bpd.Y;
+                                            if (bpd.Z.HasValue && (!existing.Z.HasValue || Math.Abs(bpd.Z.Value) > Math.Abs(existing.Z.Value))) existing.Z = bpd.Z;
+                                        }
+                                    }
+                                }
+                                catch { /* 개별 .anim 파싱 실패 무시 */ }
+                            }
+
+                            if (allAnimBs.Count > 0 && result.AvatarDefaultBlendShapes.Count == 0)
+                            {
+                                result.AvatarDefaultBlendShapes = allAnimBs;
+                                Debug.Log($"[Parser] 전체 .anim BS: {allAnimBs.Values.Sum(d => d.Count)}개 " +
+                                          $"({allAnimBs.Count}개 SMR): " +
+                                          string.Join(", ", allAnimBs.Select(kv =>
+                                              $"{kv.Key}[{string.Join(",", kv.Value.Select(b => $"{b.Key}={b.Value}"))}]")));
+                            }
+
+                            if (allBonePoses.Count > 0)
+                            {
+                                foreach (var (bn, bpd) in allBonePoses)
+                                    result.AnimClipBonePoses[bn] = bpd.ToEuler();
+                                Debug.Log($"[Parser] 전체 .anim Transform 커브 (발 본): " +
+                                          string.Join(", ", allBonePoses.Select(kv =>
+                                              $"{kv.Key}({kv.Value.ToEuler()})")));
+                            }
+                            else
+                                Debug.Log("[Parser] 전체 .anim 스캔: 발 관련 Transform 커브 없음");
+                        }
                     }
 
                     if (smrDataList.Count > 0)
@@ -290,10 +568,8 @@ namespace VirtualDresser.Runtime
                     }
                     else if (hasWeightsDense || hasWeightsSparse)
                     {
-                        // 블렌드쉐이프가 있어야 하는데 파싱 결과가 0개인 경우만 경고
-                        Debug.LogWarning($"[Parser] .prefab 파싱 결과 0개 (블렌드쉐이프 있음): {pathname} — " +
-                                         $"hasSMR={hasSMR}, hasPrefabInst={hasPrefabInst}, " +
-                                         $"hasWeightsDense={hasWeightsDense}, hasWeightsSparse={hasWeightsSparse}");
+                        // 파싱 결과 0개 = 모든 블렌드쉐이프가 0 (prefab 기본 상태) → 정상
+                        Debug.Log($"[Parser] .prefab 블렌드쉐이프 전부 0 (정상 기본상태): {pathname}");
                     }
                     else
                     {
@@ -306,37 +582,70 @@ namespace VirtualDresser.Runtime
                 }
                 finally
                 {
-                    try { File.Delete(tmpPath); } catch { }
-                    guidToTempAsset.Remove(guid);
+                    guidToMemAsset.Remove(guid);
+                    if (prefabTmpPath != null)
+                    {
+                        try { File.Delete(prefabTmpPath); } catch { }
+                        guidToTempAsset.Remove(guid);
+                    }
                 }
             }
 
             // ── 1.5패스: FBX .meta 파싱 → externalObjects로 FBX 내부 mat명 → .mat 파일명 매핑 ──
-            Debug.Log($"[Parser] meta 파일 저장 수: {guidToTempMeta.Count}개");
+            Debug.Log($"[Parser] meta 파일 저장 수: disk={guidToTempMeta.Count}개, mem={guidToMemMeta.Count}개");
             foreach (var (guid, pathname) in guidToPathname)
             {
                 if (!Path.GetExtension(pathname).Equals(".fbx", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                Debug.Log($"[Parser] FBX 발견: {Path.GetFileName(pathname)}, meta 있음={guidToTempMeta.ContainsKey(guid)}");
-                if (!guidToTempMeta.TryGetValue(guid, out var metaPath)) continue;
+                bool hasMeta = guidToMemMeta.ContainsKey(guid) || guidToTempMeta.ContainsKey(guid);
+                Debug.Log($"[Parser] FBX 발견: {Path.GetFileName(pathname)}, meta 있음={hasMeta}");
 
+                // FBX 바이너리에서 nodeId → 본 이름 파싱 (PrefabInstance fileID 해결용)
+                if (guidToTempAsset.TryGetValue(guid, out var fbxBinPath))
+                {
+                    try
+                    {
+                        byte[] fbxBytes = File.ReadAllBytes(fbxBinPath);
+                        var binaryMap = ParseFbxBinaryNodeIds(fbxBytes);
+                        foreach (var kv in binaryMap)
+                            result.FbxFileIdToName[kv.Key] = kv.Value;
+                        Debug.Log($"[Parser] FBX 바이너리 파싱: {binaryMap.Count}개 nodeId→이름 추출");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[Parser] FBX 바이너리 파싱 실패: {ex.Message}");
+                    }
+                }
+
+                // .meta: 메모리 우선, 디스크 폴백
+                string metaText = null;
+                if (guidToMemMeta.TryGetValue(guid, out var metaBuf))
+                {
+                    metaText = Encoding.UTF8.GetString(metaBuf);
+                    guidToMemMeta.Remove(guid);
+                }
+                else if (guidToTempMeta.TryGetValue(guid, out var metaPath))
+                {
+                    try { metaText = File.ReadAllText(metaPath); }
+                    catch (Exception ex) { Debug.LogWarning($"[Parser] FBX meta 읽기 실패: {pathname} — {ex.Message}"); }
+                    finally
+                    {
+                        try { File.Delete(metaPath); } catch { }
+                        guidToTempMeta.Remove(guid);
+                    }
+                }
+
+                if (metaText == null) continue;
                 try
                 {
-                    var metaText = File.ReadAllText(metaPath);
-                    // externalObjects 섹션 존재 여부 진단
                     bool hasExtObj = metaText.Contains("externalObjects:");
                     Debug.Log($"[Parser] {Path.GetFileName(pathname)}.meta: {metaText.Length}자, externalObjects={hasExtObj}");
-                    ParseFbxMeta(metaText, guidToPathname, result.FbxMaterialMap);
+                    ParseFbxMeta(metaText, guidToPathname, result.FbxMaterialMap, result.FbxFileIdToName);
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[Parser] FBX meta 읽기 실패: {pathname} — {ex.Message}");
-                }
-                finally
-                {
-                    try { File.Delete(metaPath); } catch { }
-                    guidToTempMeta.Remove(guid);
+                    Debug.LogWarning($"[Parser] FBX meta 파싱 실패: {pathname} — {ex.Message}");
                 }
             }
 
@@ -348,20 +657,82 @@ namespace VirtualDresser.Runtime
                 Debug.Log($"[Parser] FBX externalObjects 매핑: {result.FbxMaterialMap.Count}개 " +
                           $"(예: {string.Join(", ", result.FbxMaterialMap.Take(3).Select(kv => $"'{kv.Key}'→'{kv.Value}'"))})");
 
+            // ── 1.6패스: Prefab에서 수집한 회전 데이터를 FBX fileIDToRecycleName으로 본 이름 매핑 ──
+            if (result._PendingRotationMap.Count > 0)
+            {
+                int resolvedRot = 0;
+                int directRot   = 0;
+                Debug.Log($"[Parser] 회전 데이터 resolve: {result._PendingRotationMap.Count}개 항목, " +
+                          $"fileIdToName {result.FbxFileIdToName.Count}개");
+
+                foreach (var (key, rot) in result._PendingRotationMap)
+                {
+                    string boneName;
+
+                    if (key.StartsWith("__name__"))
+                    {
+                        // type=4 Transform 직접 파싱 결과 — 이름이 이미 키에 포함
+                        boneName = key.Substring("__name__".Length);
+                        directRot++;
+                    }
+                    else
+                    {
+                        // fileID 기반 — fileIDToRecycleName으로 이름 해결
+                        if (!result.FbxFileIdToName.TryGetValue(key, out boneName))
+                        {
+                            // 힐 패턴 감지: |x|≈0.7071, y≈0, z≈0 (≈ -90° around X axis)
+                            // 본 이름을 알 수 없어도 회전값은 파싱됨 → UnresolvedHeelRotation에 저장
+                            if (Mathf.Abs(rot[0]) > 0.5f && Mathf.Abs(rot[1]) < 0.15f && Mathf.Abs(rot[2]) < 0.15f)
+                            {
+                                result.UnresolvedHeelRotation = rot;
+                                Debug.Log($"[Parser] 힐 회전 감지 (fileID={key}): x={rot[0]:F4}, y={rot[1]:F4}, z={rot[2]:F4}, w={rot[3]:F4}");
+                            }
+                            continue;
+                        }
+                    }
+
+                    var q = new Quaternion(rot[0], rot[1], rot[2], rot[3]);
+                    var euler = q.eulerAngles;
+                    // 이미 있는 항목은 덮어쓰지 않음 (직접 파싱이 더 정확한 경우 우선)
+                    if (!result.AnimClipBonePoses.ContainsKey(boneName))
+                        result.AnimClipBonePoses[boneName] = euler;
+                    resolvedRot++;
+                    Debug.Log($"[Parser] Prefab 본 회전 확정: '{boneName}' euler=({euler.x:F1},{euler.y:F1},{euler.z:F1})");
+                }
+                Debug.Log($"[Parser] Prefab 본 회전 resolve: 직접={directRot}개, fileID해결={resolvedRot - directRot}개/{result._PendingRotationMap.Count - directRot}개");
+            }
+
             // ── 2패스: FBX + 텍스처 temp 파일을 최종 위치로 이동 ──
+            // ★ 텍스처 필터링: .mat 파싱으로 확인된 실제 사용 텍스처만 이동, 나머지 삭제
+            // ReferencedTextureFiles = mat에서 guid 추적으로 수집된 모든 텍스처 파일명
+            var usedTextureNames = result.ReferencedTextureFiles;
+            Debug.Log($"[Parser] 사용 텍스처 {usedTextureNames.Count}개 (전체 텍스처에서 필터링)");
+
             var fbxBySize = new List<(string path, long size)>();
+            int texSkipped = 0;
 
             foreach (var (guid, pathname) in guidToPathname)
             {
                 var ext = Path.GetExtension(pathname).ToLowerInvariant();
                 if (!guidToTempAsset.TryGetValue(guid, out var tmpPath)) continue;
 
-                // ★ 속도 개선: FBX/텍스처가 아니면 temp 파일 즉시 삭제 (이동 불필요)
                 bool needed = ext == ".fbx" || IsTextureExtension(ext);
                 if (!needed)
                 {
                     try { File.Delete(tmpPath); } catch { }
                     continue;
+                }
+
+                if (IsTextureExtension(ext))
+                {
+                    var texName = Path.GetFileName(pathname);
+                    // usedTextureNames가 0개(의상 패키지 등 .mat 없음)면 전체 허용
+                    if (usedTextureNames.Count > 0 && !usedTextureNames.Contains(texName))
+                    {
+                        try { File.Delete(tmpPath); } catch { }
+                        texSkipped++;
+                        continue;
+                    }
                 }
 
                 var finalName = SafeFileName(tempDir, Path.GetFileName(pathname));
@@ -376,6 +747,9 @@ namespace VirtualDresser.Runtime
                     result.ExtractedTextureNames.Add(finalName);
             }
 
+            if (texSkipped > 0)
+                Debug.Log($"[Parser] 미사용 텍스처 {texSkipped}개 스킵 (디스크 삭제)");
+
             // 남은 임시 asset 파일 정리
             foreach (var tmp in guidToTempAsset.Values)
                 try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
@@ -386,25 +760,34 @@ namespace VirtualDresser.Runtime
             InferAssetType(result);
 
             Debug.Log($"[Parser] {result.Filename}: FBX {result.ExtractedFbxPaths.Count}개, " +
-                      $"텍스처 {result.ExtractedTextureNames.Count}개, " +
+                      $"텍스처 {result.ExtractedTextureNames.Count}개 (필터링 후), " +
                       $"타입={result.DetectedType}({result.Confidence:F2})");
 
             return result;
         }
 
         /// <summary>
-        /// tar.gz를 단일 패스로 스트리밍하면서 asset을 임시 파일로 직접 저장.
-        /// RAM에 에셋 데이터를 올리지 않음.
+        /// tar.gz를 단일 패스로 스트리밍.
+        /// ★ 최적화: 소형 파일(.mat/.prefab/.controller/.anim/.meta, ≤512KB)은 메모리에 보관.
+        ///   FBX·텍스처 등 대형 파일만 디스크 임시 파일로 저장.
+        ///   디스크 쓰기/읽기 이중 I/O 제거로 파싱 속도 개선.
         /// </summary>
         private static (
-            Dictionary<string, string> guidToPathname,
-            Dictionary<string, string> guidToTempAsset,
-            Dictionary<string, string> guidToTempMeta)
+            Dictionary<string, string>  guidToPathname,
+            Dictionary<string, string>  guidToTempAsset,   // 디스크 임시 파일 (FBX·텍스처)
+            Dictionary<string, string>  guidToTempMeta,    // .meta 디스크 임시 파일 (대형) or 없음
+            Dictionary<string, byte[]>  guidToMemAsset,    // 메모리 버퍼 (소형 에셋)
+            Dictionary<string, byte[]>  guidToMemMeta)     // 메모리 버퍼 (소형 .meta)
             StreamTarToDisk(string packagePath, string tempDir)
         {
             var guidToPathname  = new Dictionary<string, string>();
             var guidToTempAsset = new Dictionary<string, string>();
             var guidToTempMeta  = new Dictionary<string, string>();
+            var guidToMemAsset  = new Dictionary<string, byte[]>();
+            var guidToMemMeta   = new Dictionary<string, byte[]>();
+
+            // 소형 에셋으로 판단하는 크기 상한 (512KB)
+            const long SmallFileThreshold = 512 * 1024;
 
             using var fs  = File.OpenRead(packagePath);
             using var gz  = new GZipInputStream(fs);
@@ -424,45 +807,195 @@ namespace VirtualDresser.Runtime
 
                 if (filename == "pathname")
                 {
-                    // pathname은 소형 텍스트 → 메모리로 읽기
                     using var ms = new MemoryStream((int)Math.Min(entry.Size, 4096));
                     tar.CopyEntryContents(ms);
                     guidToPathname[guid] = Encoding.UTF8.GetString(ms.ToArray()).Trim();
                 }
                 else if (filename == "asset")
                 {
-                    // ★ 속도 개선: pathname이 이미 수집된 경우 불필요한 파일은 스킵
-                    // tar는 보통 pathname → asset 순이 아닐 수 있으므로 일단 크기로 판단
-                    // 10MB 이하 소형 파일은 무조건 저장 (mat/meta 포함), 대형은 저장
-                    // → 실제 필터링은 2패스에서 pathname 보고 결정
-                    var tmpPath = Path.Combine(tempDir, guid + "_asset.tmp");
-                    using var outFile = File.Create(tmpPath);
-                    tar.CopyEntryContents(outFile);
-                    guidToTempAsset[guid] = tmpPath;
+                    if (entry.Size > 0 && entry.Size <= SmallFileThreshold)
+                    {
+                        // 소형 → 메모리 버퍼 (디스크 I/O 없음)
+                        using var ms = new MemoryStream((int)entry.Size);
+                        tar.CopyEntryContents(ms);
+                        guidToMemAsset[guid] = ms.ToArray();
+                    }
+                    else
+                    {
+                        // 대형(FBX·텍스처 등) → 디스크
+                        var tmpPath = Path.Combine(tempDir, guid + "_asset.tmp");
+                        using var outFile = File.Create(tmpPath);
+                        tar.CopyEntryContents(outFile);
+                        guidToTempAsset[guid] = tmpPath;
+                    }
                 }
                 else if (filename == "asset.meta")
                 {
-                    // FBX meta에 externalObjects(머티리얼 매핑) 정보가 있으므로 저장
-                    var metaPath = Path.Combine(tempDir, guid + "_meta.tmp");
-                    using var outMeta = File.Create(metaPath);
-                    tar.CopyEntryContents(outMeta);
-                    guidToTempMeta[guid] = metaPath;
+                    if (entry.Size > 0 && entry.Size <= SmallFileThreshold)
+                    {
+                        using var ms = new MemoryStream((int)entry.Size);
+                        tar.CopyEntryContents(ms);
+                        guidToMemMeta[guid] = ms.ToArray();
+                    }
+                    else
+                    {
+                        var metaPath = Path.Combine(tempDir, guid + "_meta.tmp");
+                        using var outMeta = File.Create(metaPath);
+                        tar.CopyEntryContents(outMeta);
+                        guidToTempMeta[guid] = metaPath;
+                    }
                 }
                 else
                 {
-                    // preview 등 그 외 항목 스킵 (스트림 소비 필수)
                     tar.CopyEntryContents(Stream.Null);
                 }
             }
 
-            return (guidToPathname, guidToTempAsset, guidToTempMeta);
+            return (guidToPathname, guidToTempAsset, guidToTempMeta, guidToMemAsset, guidToMemMeta);
+        }
+
+        // ─── FBX 바이너리 파싱: Objects 섹션의 Model 노드에서 nodeId(int64) → 본 이름 추출 ───
+        // FBX binary format: magic(27B) → 반복 노드 { endOffset(4/8B) numProps(4/8B) propsLen(4/8B) nameLen(1B) name propsData children }
+        // Model 노드의 첫 번째 prop = int64 (unique nodeId), 두 번째 prop = string ("BoneName\0\x01Model")
+        private static Dictionary<string, string> ParseFbxBinaryNodeIds(byte[] data)
+        {
+            var result = new Dictionary<string, string>();
+            if (data == null || data.Length < 27) return result;
+
+            // Magic check: "Kaydara FBX Binary  \0\x1a\x00"
+            var magic = "Kaydara FBX Binary  ";
+            for (int i = 0; i < magic.Length; i++)
+                if (data[i] != (byte)magic[i]) return result;
+
+            int version = BitConverter.ToInt32(data, 23);
+            bool is64 = version >= 7500;
+            int headerSize = is64 ? 25 : 13; // per-node header size (before nameLen)
+
+            // Helper: read node header, return false if null/end node
+            bool ReadNodeHeader(ref int p, out long nodeEnd, out long numProps, out long propsLen, out string name)
+            {
+                nodeEnd = numProps = propsLen = 0; name = "";
+                if (p + headerSize + 1 > data.Length) return false;
+                if (is64)
+                {
+                    nodeEnd  = (long)BitConverter.ToUInt64(data, p); p += 8;
+                    numProps = (long)BitConverter.ToUInt64(data, p); p += 8;
+                    propsLen = (long)BitConverter.ToUInt64(data, p); p += 8;
+                }
+                else
+                {
+                    nodeEnd  = BitConverter.ToUInt32(data, p); p += 4;
+                    numProps = BitConverter.ToUInt32(data, p); p += 4;
+                    propsLen = BitConverter.ToUInt32(data, p); p += 4;
+                }
+                int nameLen = data[p++];
+                if (nodeEnd == 0 && numProps == 0 && propsLen == 0 && nameLen == 0) return false; // null record
+                if (p + nameLen > data.Length) return false;
+                name = System.Text.Encoding.ASCII.GetString(data, p, nameLen);
+                p += nameLen;
+                return true;
+            }
+
+            // Try to read int64 prop value (type='L')
+            bool ReadInt64Prop(ref int p, out long val)
+            {
+                val = 0;
+                if (p >= data.Length || data[p] != 'L') return false;
+                p++;
+                if (p + 8 > data.Length) return false;
+                val = BitConverter.ToInt64(data, p); p += 8;
+                return true;
+            }
+
+            // Try to read string prop value (type='S')
+            bool ReadStringProp(ref int p, out string val)
+            {
+                val = "";
+                if (p >= data.Length || data[p] != 'S') return false;
+                p++;
+                if (p + 4 > data.Length) return false;
+                int len = BitConverter.ToInt32(data, p); p += 4;
+                if (len < 0 || p + len > data.Length) return false;
+                val = System.Text.Encoding.UTF8.GetString(data, p, len); p += len;
+                return true;
+            }
+
+            // Skip one property (any type)
+            void SkipProp(ref int p)
+            {
+                if (p >= data.Length) return;
+                char t = (char)data[p++];
+                switch (t)
+                {
+                    case 'Y': p += 2; break;
+                    case 'C': p += 1; break;
+                    case 'I': case 'F': p += 4; break;
+                    case 'L': case 'D': p += 8; break;
+                    case 'S': case 'R':
+                        if (p + 4 <= data.Length) { int len = BitConverter.ToInt32(data, p); p += 4 + Math.Max(0, len); }
+                        break;
+                    case 'f': case 'd': case 'l': case 'i': case 'b':
+                        if (p + 12 <= data.Length)
+                        {
+                            int arrLen = BitConverter.ToInt32(data, p);
+                            int encoding = BitConverter.ToInt32(data, p + 4);
+                            int compLen  = BitConverter.ToInt32(data, p + 8);
+                            p += 12;
+                            p += encoding == 1 ? compLen : arrLen * (t == 'd' || t == 'l' ? 8 : t == 'b' ? 1 : 4);
+                        }
+                        break;
+                }
+            }
+
+            int pos = 27;
+            // Parse top-level nodes to find "Objects"
+            while (pos < data.Length)
+            {
+                int nodeStart = pos;
+                if (!ReadNodeHeader(ref pos, out long nodeEnd, out long numProps, out long propsLen, out string nodeName))
+                    break;
+                if (nodeName == "Objects")
+                {
+                    // Skip props of Objects itself
+                    int propsEnd = pos + (int)propsLen;
+                    pos = propsEnd;
+                    // Parse children (Model nodes)
+                    while (pos < (int)nodeEnd)
+                    {
+                        int childStart = pos;
+                        if (!ReadNodeHeader(ref pos, out long childEnd, out long childNumProps, out long childPropsLen, out string childName))
+                            break;
+                        int childPropsStart = pos;
+                        if (childName == "Model" && childNumProps >= 2)
+                        {
+                            int pp = childPropsStart;
+                            if (ReadInt64Prop(ref pp, out long nodeId) && ReadStringProp(ref pp, out string fullName))
+                            {
+                                // fullName: "BoneName\x00\x01Model" or just "BoneName"
+                                int sep = fullName.IndexOf('\x00');
+                                string boneName = sep >= 0 ? fullName.Substring(0, sep) : fullName;
+                                if (!string.IsNullOrEmpty(boneName))
+                                    result[nodeId.ToString()] = boneName;
+                            }
+                        }
+                        pos = (int)childEnd; // jump to next child
+                    }
+                    break; // done
+                }
+                else
+                {
+                    pos = (int)nodeEnd;
+                }
+            }
+            return result;
         }
 
         // ─── FBX .meta 파싱 (externalObjects: FBX 내부 머티리얼명 → 외부 .mat GUID) ───
         private static void ParseFbxMeta(
             string metaText,
             Dictionary<string, string> guidToPathname,
-            Dictionary<string, string> fbxMaterialMap)
+            Dictionary<string, string> fbxMaterialMap,
+            Dictionary<string, string> fileIdToName = null)
         {
             // externalObjects 블록 라인 기반 파싱
             // 구조:
@@ -538,6 +1071,58 @@ namespace VirtualDresser.Runtime
                     inMaterialEntry = false;
                 }
             }
+
+            // ── fileIDToRecycleName 파싱 (fileID → 본/오브젝트 이름) ──
+            // 구조:
+            //   fileIDToRecycleName:
+            //     6866332237670371181: Foot.L
+            //     -8679921383154817045: Foot.R
+            // 진단: 목표 fileID가 meta 텍스트에 있는지 확인
+            if (fileIdToName != null)
+            {
+                var _metaDiagIds = new[] { "6866332237670371181", "-8679921383154817045" };
+                foreach (var did in _metaDiagIds)
+                {
+                    var idx = metaText.IndexOf(did, StringComparison.Ordinal);
+                    if (idx >= 0)
+                    {
+                        var ctx = metaText.Substring(Math.Max(0, idx - 30), Math.Min(120, metaText.Length - Math.Max(0, idx - 30)));
+                        Debug.Log($"[Parser-Diag] Meta에서 {did} 발견: ...{ctx}...");
+                    }
+                    else
+                        Debug.Log($"[Parser-Diag] Meta에서 {did} 없음 (metaText 길이={metaText.Length})");
+                }
+            }
+
+            if (fileIdToName != null && metaText.Contains("fileIDToRecycleName:"))
+            {
+                bool inSection = false;
+                int parsed = 0;
+                foreach (var rawLine in metaText.Split('\n'))
+                {
+                    var line = rawLine.TrimEnd();
+                    if (!inSection)
+                    {
+                        if (line.TrimStart().StartsWith("fileIDToRecycleName:"))
+                        { inSection = true; continue; }
+                        continue;
+                    }
+                    // 섹션 종료: 들여쓰기 없는 새 키
+                    if (line.Length > 0 && line[0] != ' ' && line[0] != '\t')
+                    { break; }
+
+                    var trimmed = line.TrimStart();
+                    // 형식: "  6866332237670371181: Foot.L"  또는  "  -8679921383154817045: Foot.R"
+                    var colonIdx = trimmed.IndexOf(':');
+                    if (colonIdx <= 0) continue;
+                    var idPart   = trimmed.Substring(0, colonIdx).Trim();
+                    var namePart = trimmed.Substring(colonIdx + 1).Trim();
+                    if (string.IsNullOrEmpty(idPart) || string.IsNullOrEmpty(namePart)) continue;
+                    fileIdToName[idPart] = namePart;
+                    parsed++;
+                }
+                Debug.Log($"[Parser] fileIDToRecycleName: {parsed}개 파싱");
+            }
         }
 
         // ─── .mat 파일 파싱 ───
@@ -552,7 +1137,8 @@ namespace VirtualDresser.Runtime
 
         private static MaterialTextures ParseMatFile(
             string matContent, string matName,
-            Dictionary<string, string> guidToPathname)
+            Dictionary<string, string> guidToPathname,
+            HashSet<string> allReferencedTextures = null)
         {
             var result = new MaterialTextures();
             bool foundTex = false;
@@ -604,9 +1190,8 @@ namespace VirtualDresser.Runtime
                              propKey.StartsWith("_NormalMap:"))    currentProp = "bump";
                     else if (propKey.StartsWith("_EmissionMap:"))  currentProp = "emission";
                     else if (propKey.StartsWith("_") && propKey.Contains(":"))
-                        currentProp = null;
+                        currentProp = "other";
 
-                    if (currentProp == null) continue;
                     if (!trimmed.Contains("guid:")) continue;
 
                     var gm = GuidRegex.Match(trimmed);
@@ -615,13 +1200,17 @@ namespace VirtualDresser.Runtime
                     string texFilename = null;
                     if (guidToPathname.TryGetValue(gm.Groups[1].Value, out var texPathname))
                         texFilename = Path.GetFileName(texPathname);
-                    if (texFilename == null) continue;
+                    if (texFilename == null) { currentProp = null; continue; }
+
+                    // ★ 모든 텍스처 파일명 수집 (lilToon 포함)
+                    allReferencedTextures?.Add(texFilename);
 
                     switch (currentProp)
                     {
                         case "main":     result.MainTex     = texFilename; foundTex = true; break;
                         case "bump":     result.BumpMap     = texFilename; break;
                         case "emission": result.EmissionMap = texFilename; break;
+                        // "other": allReferencedTextures에만 추가, result 필드 없음
                     }
                     currentProp = null;
                     continue;
@@ -825,7 +1414,9 @@ namespace VirtualDresser.Runtime
         ///   1패스: fileID → (type, 내용) 수집
         ///   2패스: SMR.m_GameObject.fileID → GO.m_Name 역참조 → GoName 확정
         /// </summary>
-        private static List<PrefabSmrData> ParsePrefabBlendShapes(string prefabYaml)
+        private static List<PrefabSmrData> ParsePrefabBlendShapes(
+            string prefabYaml,
+            Dictionary<string, float[]> outRotationMap = null)
         {
             if (string.IsNullOrEmpty(prefabYaml)) return new List<PrefabSmrData>();
 
@@ -882,6 +1473,61 @@ namespace VirtualDresser.Runtime
                     }
                 }
             }
+
+            // ── 2.5패스: stripped Transform의 m_CorrespondingSourceObject 역추적 ──
+            // FBX fileID → GO 이름 매핑을 fileIDToRecycleName 없이 구성.
+            //
+            // 구조 (Unity stripped prefab):
+            //   --- !u!4 &localFileId stripped
+            //   Transform:
+            //     m_CorrespondingSourceObject: {fileID: 6866332..., guid: FBX_GUID, type: 3}
+            //     m_GameObject: {fileID: localGoFileId}
+            //
+            //   --- !u!1 &localGoFileId
+            //   GameObject:
+            //     m_Name: Foot.L
+            //
+            // → FBX fileID 6866332... → localGoFileId → "Foot.L"
+            var fbxIdToName = new Dictionary<string, string>(); // FBX fileID → bone name
+            var correspRx   = new System.Text.RegularExpressions.Regex(
+                @"fileID:\s*(-?\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            foreach (var kv in fileIdLines)
+            {
+                if (kv.Value.type != 4) continue; // Transform만
+
+                string fbxFileId    = null;
+                string goLocalFileId = null;
+
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+                    if (fbxFileId == null && t.StartsWith("m_CorrespondingSourceObject:"))
+                    {
+                        var fm = correspRx.Match(t);
+                        if (fm.Success && fm.Groups[1].Value != "0")
+                            fbxFileId = fm.Groups[1].Value;
+                    }
+                    if (goLocalFileId == null && t.StartsWith("m_GameObject:"))
+                    {
+                        var gm = correspRx.Match(t);
+                        if (gm.Success)
+                            goLocalFileId = gm.Groups[1].Value;
+                    }
+                    if (fbxFileId != null && goLocalFileId != null) break;
+                }
+
+                if (fbxFileId != null && goLocalFileId != null
+                    && goNames.TryGetValue(goLocalFileId, out var boneName)
+                    && !string.IsNullOrEmpty(boneName))
+                {
+                    fbxIdToName.TryAdd(fbxFileId, boneName);
+                }
+            }
+            Debug.Log($"[Parser] FBX fileID→이름 역추적: {fbxIdToName.Count}개" +
+                      (fbxIdToName.Count > 0
+                          ? $" (예: {string.Join(", ", fbxIdToName.Take(5).Select(kv => $"{kv.Key}→'{kv.Value}'"))})"
+                          : ""));
 
             // ── 3패스: SkinnedMeshRenderer(type=137) 파싱 ──
             var result = new List<PrefabSmrData>();
@@ -970,6 +1616,9 @@ namespace VirtualDresser.Runtime
                 @"fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-f]{32}))?",
                 System.Text.RegularExpressions.RegexOptions.Compiled);
 
+            // fileId → quaternion (x,y,z,w) 수집용 (outRotationMap이 null이면 내부 임시 사용)
+            var rotationMap = outRotationMap ?? new Dictionary<string, float[]>();
+
             foreach (var kv in fileIdLines)
             {
                 if (kv.Value.type != 1001) continue;  // 1001 = PrefabInstance
@@ -983,6 +1632,7 @@ namespace VirtualDresser.Runtime
                 int    pendingBsIndex      = -1;   // propertyPath에서 읽은 BS 인덱스 (value 대기 중)
                 bool   pendingBsHandled    = false; // value: 를 이미 읽었는지
                 bool   inModifications     = false;
+                string pendingRotComp      = null;  // "x","y","z","w" — m_LocalRotation 파싱 중
 
                 foreach (var l in kv.Value.lines)
                 {
@@ -1001,6 +1651,7 @@ namespace VirtualDresser.Runtime
                     {
                         pendingBsIndex   = -1;
                         pendingBsHandled = false;
+                        pendingRotComp   = null;
                         var tm = targetRx.Match(t);
                         if (tm.Success)
                         {
@@ -1013,28 +1664,65 @@ namespace VirtualDresser.Runtime
 
                     if (currentTargetFileId == null) continue;
 
-                    // propertyPath: m_BlendShapeWeights.Array.data[N]
+                    // propertyPath: m_BlendShapeWeights.Array.data[N]  or  m_LocalRotation.x/y/z/w
                     if (t.StartsWith("propertyPath:"))
                     {
-                        var bm = bsIndexRx.Match(t);
+                        var path = t.Substring("propertyPath:".Length).Trim();
+                        var bm = bsIndexRx.Match(path);
                         pendingBsIndex   = bm.Success ? int.Parse(bm.Groups[1].Value) : -1;
                         pendingBsHandled = false;
+                        pendingRotComp   = null;
+
+                        // m_LocalRotation.x/y/z/w 감지
+                        if (path.StartsWith("m_LocalRotation."))
+                        {
+                            pendingRotComp = path.Substring("m_LocalRotation.".Length).Trim(); // "x","y","z","w"
+                            Debug.Log($"[Parser] Prefab 회전 발견: fileID={currentTargetFileId} comp={pendingRotComp}");
+                        }
                         continue;
                     }
 
                     // value: N  — pendingBsIndex가 유효하고 아직 처리 안 된 경우만
-                    if (t.StartsWith("value:") && pendingBsIndex >= 0 && !pendingBsHandled)
+                    if (t.StartsWith("value:") && !pendingBsHandled)
                     {
-                        pendingBsHandled = true;
                         var valStr = t.Substring("value:".Length).Trim();
                         if (float.TryParse(valStr,
                             System.Globalization.NumberStyles.Float,
                             System.Globalization.CultureInfo.InvariantCulture,
-                            out var val) && val != 0f)
+                            out var val))
                         {
-                            if (!sparseMap.ContainsKey(currentTargetFileId))
-                                sparseMap[currentTargetFileId] = new Dictionary<int, float>();
-                            sparseMap[currentTargetFileId][pendingBsIndex] = val;
+                            // 블렌드쉐이프 처리
+                            if (pendingBsIndex >= 0)
+                            {
+                                pendingBsHandled = true;
+                                if (val != 0f)
+                                {
+                                    if (!sparseMap.ContainsKey(currentTargetFileId))
+                                        sparseMap[currentTargetFileId] = new Dictionary<int, float>();
+                                    sparseMap[currentTargetFileId][pendingBsIndex] = val;
+                                    Debug.Log($"[Parser] sparse BS 발견: fileID={currentTargetFileId} idx={pendingBsIndex} val={val}");
+                                }
+                            }
+                            // m_LocalRotation 처리
+                            else if (pendingRotComp != null)
+                            {
+                                pendingBsHandled = true;
+                                if (!rotationMap.ContainsKey(currentTargetFileId))
+                                    rotationMap[currentTargetFileId] = new float[4]; // [x,y,z,w]
+                                var rot = rotationMap[currentTargetFileId];
+                                switch (pendingRotComp)
+                                {
+                                    case "x": rot[0] = val; break;
+                                    case "y": rot[1] = val; break;
+                                    case "z": rot[2] = val; break;
+                                    case "w": rot[3] = val; break;
+                                }
+                                Debug.Log($"[Parser] 회전 값 수집: fileID={currentTargetFileId} {pendingRotComp}={val:F4}");
+                            }
+                        }
+                        else if (pendingBsIndex >= 0)
+                        {
+                            Debug.LogWarning($"[Parser] sparse BS 값 파싱 실패: idx={pendingBsIndex} raw='{valStr}'");
                         }
                         // pendingBsIndex는 유지 — objectReference: 등이 와도 이미 처리됨
                         continue;
@@ -1049,9 +1737,17 @@ namespace VirtualDresser.Runtime
                     {
                         pendingBsIndex   = -1;
                         pendingBsHandled = false;
+                        pendingRotComp   = null;
                     }
                 }
 
+
+                // sparse 전체 카운트 진단
+                int totalSparseEntries = sparseMap.Values.Sum(d => d.Count);
+                if (totalSparseEntries == 0 && guidMap.Count > 0)
+                    Debug.Log($"[Parser] sparse 파싱: fileID그룹={guidMap.Count}개, BS entries=0 (전부 0값)");
+                else if (totalSparseEntries > 0)
+                    Debug.Log($"[Parser] sparse 파싱: fileID그룹={sparseMap.Count}개, non-zero entries={totalSparseEntries}개");
 
                 // 스파스 데이터가 0이 아닌 항목만 유의미하므로 필터링 후 PrefabSmrData 생성
                 foreach (var sm in sparseMap)
@@ -1091,6 +1787,122 @@ namespace VirtualDresser.Runtime
 
             Debug.Log($"[Parser] ParsePrefabBlendShapes: type137={result.Count(r => r.SparseWeights == null)}개, " +
                       $"type1001={result.Count(r => r.SparseWeights != null)}개");
+
+            // ── 4.5패스: rotationMap의 fileID 키 → 본 이름 해결 (3단계 폴백) ──
+            if (outRotationMap != null)
+            {
+                var goIdRx2 = new System.Text.RegularExpressions.Regex(
+                    @"m_GameObject:\s*\{fileID:\s*(-?\d+)\}",
+                    System.Text.RegularExpressions.RegexOptions.Compiled);
+
+                // 진단: 목표 fileID가 fileIdLines에 있는지 확인
+                var _targetIds = new[] { "6866332237670371181", "-8679921383154817045" };
+                foreach (var tid in _targetIds)
+                {
+                    bool inLines = fileIdLines.ContainsKey(tid);
+                    string blockType = inLines ? fileIdLines[tid].type.ToString() : "N/A";
+                    bool inRotMap = outRotationMap.ContainsKey(tid);
+                    Debug.Log($"[Parser-Diag] fileID={tid}: fileIdLines={inLines}(type={blockType}), rotMap={inRotMap}");
+                }
+                Debug.Log($"[Parser-Diag] fileIdLines 총 키: {fileIdLines.Count}, rotMap 키: {string.Join(", ", outRotationMap.Keys)}");
+
+                int resolved = 0;
+                foreach (var fileId in outRotationMap.Keys.ToList())
+                {
+                    if (fileId.StartsWith("__name__")) continue;
+
+                    string boneName = null;
+
+                    // 방법 1: m_CorrespondingSourceObject 역추적 맵 (stripped prefab)
+                    fbxIdToName.TryGetValue(fileId, out boneName);
+
+                    // 방법 2: 모델 프리팹에서 FBX fileID = 로컬 fileID
+                    // → fileIdLines에 해당 fileID가 type=4(Transform)으로 직접 있음
+                    if (boneName == null && fileIdLines.TryGetValue(fileId, out var block) && block.type == 4)
+                    {
+                        foreach (var bl in block.lines)
+                        {
+                            var bt = bl.TrimStart();
+                            if (bt.StartsWith("m_GameObject:"))
+                            {
+                                var gm = goIdRx2.Match(bt);
+                                if (gm.Success)
+                                    goNames.TryGetValue(gm.Groups[1].Value, out boneName);
+                                break;
+                            }
+                        }
+                        if (boneName != null)
+                            Debug.Log($"[Parser] 모델 프리팹 직접 해결: fileID={fileId} → '{boneName}'");
+                    }
+
+                    if (boneName == null) continue;
+
+                    outRotationMap[$"__name__{boneName}"] = outRotationMap[fileId];
+                    outRotationMap.Remove(fileId);
+                    resolved++;
+                    Debug.Log($"[Parser] fileID→이름 최종 해결: {fileId} → '{boneName}'");
+                }
+                Debug.Log($"[Parser] fileID 이름 해결 완료: {resolved}/{outRotationMap.Count + resolved}개");
+            }
+
+            // ── 5패스: type=4(Transform) 블록에서 non-identity m_LocalRotation 직접 추출 ──
+            // 핵심: prefab에 type=4 Transform 블록이 있으면 GO이름 → rotation을 바로 얻을 수 있음
+            // fileIDToRecycleName 없이도 동작하는 폴백 방식
+            if (outRotationMap != null)
+            {
+                // inline quaternion: m_LocalRotation: {x: 0.5, y: 0, z: 0, w: 0.866}
+                var inlineRotRx = new System.Text.RegularExpressions.Regex(
+                    @"m_LocalRotation:\s*\{x:\s*([\d.eE+-]+),\s*y:\s*([\d.eE+-]+),\s*z:\s*([\d.eE+-]+),\s*w:\s*([\d.eE+-]+)\}",
+                    System.Text.RegularExpressions.RegexOptions.Compiled);
+                var goIdRx = new System.Text.RegularExpressions.Regex(
+                    @"m_GameObject:\s*\{fileID:\s*(-?\d+)\}",
+                    System.Text.RegularExpressions.RegexOptions.Compiled);
+
+                int directRotFound = 0;
+                foreach (var kv in fileIdLines)
+                {
+                    if (kv.Value.type != 4) continue; // 4 = Transform
+
+                    string rotLine  = null;
+                    string goIdLine = null;
+                    foreach (var l in kv.Value.lines)
+                    {
+                        var t = l.TrimStart();
+                        if (t.StartsWith("m_LocalRotation:")) rotLine  = t;
+                        if (t.StartsWith("m_GameObject:"))   goIdLine = t;
+                        if (rotLine != null && goIdLine != null) break;
+                    }
+                    if (rotLine == null || goIdLine == null) continue;
+
+                    var rm = inlineRotRx.Match(rotLine);
+                    if (!rm.Success) continue;
+
+                    if (!float.TryParse(rm.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float rx)) continue;
+                    if (!float.TryParse(rm.Groups[2].Value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float ry)) continue;
+                    if (!float.TryParse(rm.Groups[3].Value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float rz)) continue;
+                    if (!float.TryParse(rm.Groups[4].Value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out float rw)) continue;
+
+                    // identity에 가까우면 스킵 (w≈1이고 x,y,z≈0)
+                    float angle = Quaternion.Angle(new Quaternion(rx, ry, rz, rw), Quaternion.identity);
+                    if (angle < 1f) continue;
+
+                    var gm = goIdRx.Match(goIdLine);
+                    if (!gm.Success) continue;
+                    string goId = gm.Groups[1].Value;
+                    if (!goNames.TryGetValue(goId, out var boneName) || string.IsNullOrEmpty(boneName)) continue;
+
+                    // boneName을 key로 직접 저장 (fileID 대신) — 1.6패스 resolve 불필요
+                    // 구분: 이름이 숫자로만 이루어진 fileID와 충돌 없음
+                    outRotationMap[$"__name__{boneName}"] = new float[] { rx, ry, rz, rw };
+                    directRotFound++;
+                    Debug.Log($"[Parser] Prefab Transform 직접 회전: '{boneName}' angle={angle:F1}° q=({rx:F3},{ry:F3},{rz:F3},{rw:F3})");
+                }
+                Debug.Log($"[Parser] type=4 Transform 직접 회전 발견: {directRotFound}개");
+            }
 
             return result;
         }
@@ -1163,6 +1975,456 @@ namespace VirtualDresser.Runtime
         }
 
         /// <summary>
+        /// prefab YAML에서 m_IsActive: 0 인 GameObject 이름 목록 반환.
+        /// type=1(GameObject) 블록에서 m_IsActive와 m_Name을 함께 파싱.
+        /// </summary>
+        // ────────────────────────────────────────────────────────────────
+        // VRCAvatarDescriptor → FX AnimatorController → 기본 AnimationClip
+        // → blendShape 커브 기본값 파싱 체인
+        // ────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// prefab YAML에서 VRCAvatarDescriptor의 FX 레이어(type=4)
+        /// AnimatorController GUID를 추출합니다.
+        /// </summary>
+        private static string ParseFxControllerGuid(string prefabYaml)
+        {
+            // type=114 (MonoBehaviour) 블록 중 baseAnimationLayers 필드를 가진 것 탐색
+            var headerRx = new System.Text.RegularExpressions.Regex(
+                @"^---\s+!u!(\d+)\s+&(-?\d+)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+            var guidRx = new System.Text.RegularExpressions.Regex(
+                @"guid:\s*([0-9a-f]{32})",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            bool inMono = false, inBaseLayers = false;
+            int  currentLayerType = -1;
+
+            foreach (var raw in prefabYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var hm = headerRx.Match(line);
+                if (hm.Success)
+                {
+                    inMono       = hm.Groups[1].Value == "114";
+                    inBaseLayers = false;
+                    currentLayerType = -1;
+                    continue;
+                }
+                if (!inMono) continue;
+
+                var t = line.TrimStart();
+                if (t.StartsWith("baseAnimationLayers:"))  { inBaseLayers = true; continue; }
+                if (!inBaseLayers) continue;
+
+                // 다른 최상위 필드가 오면 레이어 섹션 종료
+                if (!line.StartsWith(" ") && !line.StartsWith("\t") &&
+                    t.Length > 0 && !t.StartsWith("-") && !t.StartsWith("type:") &&
+                    !t.StartsWith("animatorController:") && !t.StartsWith("isEnabled:"))
+                {
+                    inBaseLayers = false; continue;
+                }
+
+                if (t.StartsWith("type:"))
+                {
+                    int.TryParse(t.Substring("type:".Length).Trim(), out currentLayerType);
+                    continue;
+                }
+
+                // FX 레이어 (type=4) animatorController guid 추출
+                if (currentLayerType == 4 && t.StartsWith("animatorController:"))
+                {
+                    var gm = guidRx.Match(t);
+                    if (gm.Success)
+                    {
+                        var fx = gm.Groups[1].Value;
+                        Debug.Log($"[Parser] VRCAvatarDescriptor FX controller GUID={fx}");
+                        return fx;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// AnimatorController YAML에서 모든 레이어의 기본 상태(DefaultState) AnimationClip GUID를 수집.
+        /// VRC FX 컨트롤러는 레이어가 여러 개이고(Base/Gesture/Action/Foot 등),
+        /// 힐 블렌드쉐이프 같은 것은 Base Layer가 아닌 별도 레이어에 있을 수 있음.
+        /// BlendTree motion은 내부 첫 번째 child clip GUID를 사용.
+        /// </summary>
+        private static List<string> ParseAnimatorAllDefaultClipGuids(string controllerYaml)
+        {
+            var result = new List<string>();
+            var headerRx = new System.Text.RegularExpressions.Regex(
+                @"^---\s+!u!(\d+)\s+&(-?\d+)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+            var fileIdRx = new System.Text.RegularExpressions.Regex(
+                @"fileID:\s*(-?\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+            var guidRx = new System.Text.RegularExpressions.Regex(
+                @"guid:\s*([0-9a-f]{32})", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            // 1패스: fileID → (type, lines) 맵 구축
+            var blocks = new Dictionary<string, (int type, List<string> lines)>();
+            string curId = null; int curType = 0; var curLines = new List<string>();
+
+            foreach (var raw in controllerYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var hm = headerRx.Match(line);
+                if (hm.Success)
+                {
+                    if (curId != null) blocks[curId] = (curType, curLines);
+                    curType  = int.Parse(hm.Groups[1].Value);
+                    curId    = hm.Groups[2].Value;
+                    curLines = new List<string>();
+                    continue;
+                }
+                curLines?.Add(line);
+            }
+            if (curId != null) blocks[curId] = (curType, curLines);
+
+            // AnimatorController (type=91) → 모든 레이어의 StateMachine fileID 수집
+            var smFileIds = new List<string>();
+            foreach (var kv in blocks)
+            {
+                if (kv.Value.type != 91) continue;
+                bool inLayers = false;
+                foreach (var l in kv.Value.lines)
+                {
+                    var t = l.TrimStart();
+                    if (t.StartsWith("m_AnimatorLayers:")) { inLayers = true; continue; }
+                    if (!inLayers) continue;
+                    // 다른 최상위 필드가 오면 레이어 섹션 종료
+                    if (!l.StartsWith(" ") && !l.StartsWith("\t") && t.Length > 0
+                        && !t.StartsWith("-") && !t.StartsWith("m_Name:")
+                        && !t.StartsWith("m_StateMachine:") && !t.StartsWith("m_Mask:")
+                        && !t.StartsWith("m_Motions:") && !t.StartsWith("m_Behaviours:")
+                        && !t.StartsWith("m_BlendingMode:") && !t.StartsWith("m_SyncedLayerIndex:")
+                        && !t.StartsWith("m_DefaultWeight:") && !t.StartsWith("m_IKPass:")
+                        && !t.StartsWith("m_SyncedLayerAffectsTiming:") && !t.StartsWith("m_Controller:"))
+                    { inLayers = false; continue; }
+                    if (t.StartsWith("m_StateMachine:"))
+                    {
+                        var fm = fileIdRx.Match(t);
+                        if (fm.Success) smFileIds.Add(fm.Groups[1].Value);
+                    }
+                }
+            }
+
+            Debug.Log($"[Parser] FX AnimatorController: {smFileIds.Count}개 레이어 StateMachine 발견");
+
+            // 각 StateMachine → DefaultState → Motion GUID 수집
+            foreach (var smId in smFileIds)
+            {
+                if (!blocks.TryGetValue(smId, out var smBlock) || smBlock.type != 1107) continue;
+
+                string defaultStateId = null;
+                foreach (var l in smBlock.lines)
+                {
+                    var t = l.TrimStart();
+                    if (t.StartsWith("m_DefaultState:"))
+                    {
+                        var fm = fileIdRx.Match(t);
+                        if (fm.Success) { defaultStateId = fm.Groups[1].Value; break; }
+                    }
+                }
+                if (defaultStateId == null) continue;
+
+                if (!blocks.TryGetValue(defaultStateId, out var stateBlock) || stateBlock.type != 1102)
+                    continue;
+
+                foreach (var l in stateBlock.lines)
+                {
+                    var t = l.TrimStart();
+                    if (!t.StartsWith("m_Motion:")) continue;
+
+                    var gm = guidRx.Match(t);
+                    if (gm.Success)
+                    {
+                        var clipGuid = gm.Groups[1].Value;
+                        Debug.Log($"[Parser] FX 레이어 기본 클립 GUID={clipGuid}");
+                        result.Add(clipGuid);
+                    }
+                    else
+                    {
+                        // BlendTree: fileID 비zero, guid 없음 → 내부 child 클립 탐색
+                        var fm = fileIdRx.Match(t);
+                        if (fm.Success && fm.Groups[1].Value != "0")
+                        {
+                            var btId = fm.Groups[1].Value;
+                            if (blocks.TryGetValue(btId, out var btBlock))
+                            {
+                                bool inChildren = false;
+                                foreach (var bl in btBlock.lines)
+                                {
+                                    var bt = bl.TrimStart();
+                                    if (bt.StartsWith("m_Motions:")) { inChildren = true; continue; }
+                                    if (!inChildren) continue;
+                                    if (!bl.StartsWith(" ") && !bl.StartsWith("\t") && bt.Length > 0
+                                        && !bt.StartsWith("-") && !bt.StartsWith("m_MotionTimeParameter:"))
+                                    { inChildren = false; continue; }
+                                    var cgm = guidRx.Match(bl);
+                                    if (cgm.Success)
+                                    {
+                                        Debug.Log($"[Parser] FX BlendTree child 클립 GUID={cgm.Groups[1].Value}");
+                                        result.Add(cgm.Groups[1].Value);
+                                        break; // 첫 번째 child만
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// AnimationClip YAML의 m_FloatCurves에서 blendShape 커브를 읽어
+        /// GO 경로 끝 이름 → (blendshape 이름 → 값) 형태로 반환합니다.
+        /// classID=137 (SkinnedMeshRenderer) 커브만 대상으로 합니다.
+        /// </summary>
+        private static Dictionary<string, Dictionary<string, float>> ParseAnimClipBlendShapes(string animYaml)
+        {
+            var result = new Dictionary<string, Dictionary<string, float>>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(animYaml)) return result;
+
+            // m_FloatCurves 섹션을 라인 단위로 파싱
+            // 각 커브 항목 구조:
+            //   - curve: { ... m_Curve: [ {time:0, value:100, ...} ] }
+            //     attribute: blendShape.NAME
+            //     path: Body_base
+            //     classID: 137
+            bool inFloatCurves = false;
+            float   curValue    = 0f;
+            bool    hasValue    = false;
+            string  curAttr     = null;
+            string  curPath     = null;
+            int     curClassId  = -1;
+            bool    firstKey    = true;  // m_Curve의 첫 번째 keyframe만 사용
+
+            foreach (var raw in animYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var t    = line.TrimStart();
+
+                if (t.StartsWith("m_FloatCurves:")) { inFloatCurves = true; continue; }
+                if (!inFloatCurves) continue;
+
+                // 다른 최상위 필드가 오면 섹션 종료
+                if (!line.StartsWith(" ") && !line.StartsWith("\t") && t.Length > 0 &&
+                    !t.StartsWith("-") && t.Contains(":") && !t.StartsWith("curve:") &&
+                    !t.StartsWith("attribute:") && !t.StartsWith("path:") && !t.StartsWith("classID:"))
+                {
+                    inFloatCurves = false; continue;
+                }
+
+                // 새 커브 항목 시작 "- curve:"
+                if (t.StartsWith("- curve:"))
+                {
+                    // 이전 커브 결과 저장
+                    if (curAttr != null && curPath != null && curClassId == 137 &&
+                        hasValue && curAttr.StartsWith("blendShape."))
+                    {
+                        var bsName = curAttr.Substring("blendShape.".Length);
+                        var goName = curPath.Split('/').Last(); // 경로 끝 이름만
+                        if (!result.ContainsKey(goName))
+                            result[goName] = new Dictionary<string, float>(StringComparer.Ordinal);
+                        if (curValue != 0f) // 0인 값은 기본값이므로 생략
+                            result[goName][bsName] = curValue;
+                    }
+                    // 리셋
+                    curAttr = curPath = null; curClassId = -1;
+                    hasValue = false; curValue = 0f; firstKey = true;
+                    continue;
+                }
+
+                // attribute: blendShape.NAME
+                if (t.StartsWith("attribute:"))
+                    curAttr = t.Substring("attribute:".Length).Trim();
+
+                // path: Body_base (또는 Armature/Hips/Body_base 등)
+                else if (t.StartsWith("path:"))
+                    curPath = t.Substring("path:".Length).Trim();
+
+                // classID: 137 → SkinnedMeshRenderer
+                else if (t.StartsWith("classID:"))
+                    int.TryParse(t.Substring("classID:".Length).Trim(), out curClassId);
+
+                // keyframe value (첫 번째만 사용)
+                else if (firstKey && t.StartsWith("value:") && curClassId == 137)
+                {
+                    var vs = t.Substring("value:".Length).Trim();
+                    // "value: 100 {tangentMode:" 같은 뒤에 다른 내용이 올 수 있음
+                    var sp = vs.IndexOf(' ');
+                    if (sp > 0) vs = vs.Substring(0, sp);
+                    if (float.TryParse(vs, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v))
+                    {
+                        curValue = v; hasValue = true; firstKey = false;
+                    }
+                }
+            }
+
+            // 마지막 커브 처리
+            if (curAttr != null && curPath != null && curClassId == 137 &&
+                hasValue && curAttr.StartsWith("blendShape.") && curValue != 0f)
+            {
+                var bsName = curAttr.Substring("blendShape.".Length);
+                var goName = curPath.Split('/').Last();
+                if (!result.ContainsKey(goName))
+                    result[goName] = new Dictionary<string, float>(StringComparer.Ordinal);
+                result[goName][bsName] = curValue;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// AnimationClip YAML의 m_EulerCurves / m_RotationCurves에서
+        /// Transform(classID=4) 본 회전 커브를 읽어 본 이름 → Euler 각도로 반환.
+        /// 힐 각도 등 bone-driven 포즈 보정에 사용.
+        /// </summary>
+        private static Dictionary<string, BonePoseData> ParseAnimClipEulerCurves(string animYaml)
+        {
+            var result = new Dictionary<string, BonePoseData>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(animYaml)) return result;
+
+            // m_EulerCurves 또는 m_EditorCurves 섹션 파싱
+            // 각 항목 구조:
+            //   - curve:
+            //       m_Curve:
+            //       - time: 0
+            //         value: -30
+            //         ...
+            //     attribute: localEulerAnglesRaw.x   (또는 .y .z)
+            //     path: Armature/Hips/.../Foot.L
+            //     classID: 4
+
+            bool inEulerCurves = false;
+            float   curValue   = 0f;
+            bool    hasValue   = false;
+            string  curAttr    = null;
+            string  curPath    = null;
+            int     curClassId = -1;
+            bool    firstKey   = true;
+
+            foreach (var raw in animYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var t    = line.TrimStart();
+
+                // 섹션 시작
+                if (t.StartsWith("m_EulerCurves:")) { inEulerCurves = true; continue; }
+
+                // 다른 최상위 섹션 → 종료
+                if (inEulerCurves && !line.StartsWith(" ") && !line.StartsWith("\t")
+                    && t.Length > 0 && !t.StartsWith("-") && t.Contains(":"))
+                { inEulerCurves = false; continue; }
+
+                if (!inEulerCurves) continue;
+
+                // 새 커브 항목 시작
+                if (t.StartsWith("- curve:"))
+                {
+                    // 이전 커브 저장
+                    if (curAttr != null && curPath != null && curClassId == 4 && hasValue)
+                    {
+                        var boneName = curPath.Split('/').Last();
+                        if (!result.TryGetValue(boneName, out var bpd))
+                            result[boneName] = bpd = new BonePoseData();
+
+                        if (curAttr.EndsWith(".x", StringComparison.OrdinalIgnoreCase)) bpd.X = curValue;
+                        else if (curAttr.EndsWith(".y", StringComparison.OrdinalIgnoreCase)) bpd.Y = curValue;
+                        else if (curAttr.EndsWith(".z", StringComparison.OrdinalIgnoreCase)) bpd.Z = curValue;
+                    }
+                    curAttr = curPath = null; curClassId = -1; hasValue = false; curValue = 0f; firstKey = true;
+                    continue;
+                }
+
+                if (t.StartsWith("attribute:"))
+                    curAttr = t.Substring("attribute:".Length).Trim();
+                else if (t.StartsWith("path:"))
+                    curPath = t.Substring("path:".Length).Trim();
+                else if (t.StartsWith("classID:"))
+                    int.TryParse(t.Substring("classID:".Length).Trim(), out curClassId);
+                else if (firstKey && t.StartsWith("value:") && curClassId == 4)
+                {
+                    var vs = t.Substring("value:".Length).Trim();
+                    var sp = vs.IndexOf(' ');
+                    if (sp > 0) vs = vs.Substring(0, sp);
+                    if (float.TryParse(vs, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v))
+                    { curValue = v; hasValue = true; firstKey = false; }
+                }
+            }
+
+            // 마지막 커브 처리
+            if (curAttr != null && curPath != null && curClassId == 4 && hasValue)
+            {
+                var boneName = curPath.Split('/').Last();
+                if (!result.TryGetValue(boneName, out var bpd))
+                    result[boneName] = bpd = new BonePoseData();
+                if (curAttr.EndsWith(".x", StringComparison.OrdinalIgnoreCase)) bpd.X = curValue;
+                else if (curAttr.EndsWith(".y", StringComparison.OrdinalIgnoreCase)) bpd.Y = curValue;
+                else if (curAttr.EndsWith(".z", StringComparison.OrdinalIgnoreCase)) bpd.Z = curValue;
+            }
+
+            return result;
+        }
+
+        private static HashSet<string> ParsePrefabInactiveGoNames(string prefabYaml)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(prefabYaml)) return result;
+
+            var headerRx = new System.Text.RegularExpressions.Regex(
+                @"^---\s+!u!(\d+)\s+&(-?\d+)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+            int  currentType = 0;
+            bool isGo        = false;
+            string pendingName = null;
+            bool   pendingInactive = false;
+
+            foreach (var raw in prefabYaml.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var m = headerRx.Match(line);
+                if (m.Success)
+                {
+                    // 이전 블록 결과 처리
+                    if (isGo && pendingInactive && pendingName != null)
+                        result.Add(pendingName);
+
+                    currentType    = int.Parse(m.Groups[1].Value);
+                    isGo           = (currentType == 1);
+                    pendingName    = null;
+                    pendingInactive = false;
+                    continue;
+                }
+
+                if (!isGo) continue;
+
+                var t = line.TrimStart();
+                if (t.StartsWith("m_Name:"))
+                    pendingName = t.Substring("m_Name:".Length).Trim();
+                else if (t.StartsWith("m_IsActive:"))
+                {
+                    var valStr = t.Substring("m_IsActive:".Length).Trim();
+                    pendingInactive = (valStr == "0");
+                }
+            }
+
+            // 마지막 블록
+            if (isGo && pendingInactive && pendingName != null)
+                result.Add(pendingName);
+
+            return result;
+        }
+
         /// prefab YAML에서 VRCPhysBone 컴포넌트(type=114)를 파싱해 PhysBoneData 목록 반환.
         /// </summary>
         private static List<PhysBoneData> ParsePrefabPhysBones(string prefabYaml)
@@ -1283,8 +2545,7 @@ namespace VirtualDresser.Runtime
 
                 if (!string.IsNullOrEmpty(pb.RootBoneName))
                     result.Add(pb);
-                else
-                    Debug.LogWarning("[Parser] PhysBone rootBone 이름 해결 실패 (fileID 역참조 누락)");
+                // rootBone이 외부 FBX Transform을 참조하면 fileID 역참조 불가 — 정상 동작, 로그 생략
             }
 
             return result;

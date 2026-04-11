@@ -121,8 +121,41 @@ namespace VirtualDresser.Runtime
             return _cache;
         }
 
+        /// <summary>
+        /// 특정 아바타 config만 로드. 캐시에 없으면 해당 파일만 읽음.
+        /// LoadAll()과 달리 첫 호출 시 지정된 아바타만 파싱하므로 빠름.
+        /// </summary>
         public static AvatarConfig Get(string avatarId)
         {
+            if (string.IsNullOrEmpty(avatarId)) return null;
+
+            // 이미 전체 캐시가 있으면 그대로 사용
+            if (_cache != null)
+                return _cache.TryGetValue(avatarId, out var cached) ? cached : null;
+
+            // 전체 캐시 없으면 해당 아바타 JSON만 먼저 시도
+            var asset = Resources.Load<TextAsset>($"avatar-configs/{avatarId}");
+            if (asset != null)
+            {
+                try
+                {
+                    var config = Newtonsoft.Json.JsonConvert.DeserializeObject<AvatarConfig>(asset.text);
+                    if (config?.avatarId != null)
+                    {
+                        // 부분 캐시 초기화 (이후 LoadAll()과 공유)
+                        if (_cache == null) _cache = new Dictionary<string, AvatarConfig>();
+                        _cache[config.avatarId] = config;
+                        Debug.Log($"[AvatarConfig] 개별 로드: {config.avatarId} ({config.displayNameKo})");
+                        return config;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[AvatarConfig] 파싱 실패: {avatarId} — {e.Message}");
+                }
+            }
+
+            // 개별 로드 실패 시 전체 로드로 폴백
             var all = LoadAll();
             return all.TryGetValue(avatarId, out var cfg) ? cfg : null;
         }

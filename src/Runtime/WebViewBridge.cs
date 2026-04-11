@@ -24,11 +24,12 @@ namespace VirtualDresser.Runtime
         public static event Action<string, string> OnMessage; // (type, rawJson)
 
         // ─── 설정 ───
-        [SerializeField] private int marginTop = 0;     // 상단 여백 (px) — 필요시 조정
-        [SerializeField] private int uiHeight  = 160;   // WebView 높이 (px)
+        [SerializeField] private int marginTop  = 0;    // 상단 여백 (px)
+        [SerializeField] private int panelWidth = 340;  // 오른쪽 패널 너비 — App.css --panel-w 와 일치
 
         private WebViewObject _webView;
         private bool _ready;
+        private bool _suspended;
 
         // ─── React 앱 URL ───
         // 빌드 시: StreamingAssets/ui/index.html (번들된 정적 파일)
@@ -37,7 +38,7 @@ namespace VirtualDresser.Runtime
         {
 #if UNITY_EDITOR
             // 개발 중 Vite dev server 사용
-            return "http://127.0.0.1:7000";
+            return "http://localhost:7000";
 #else
             var htmlPath = Path.Combine(Application.streamingAssetsPath, "ui", "index.html");
 #if UNITY_STANDALONE_WIN
@@ -82,7 +83,8 @@ namespace VirtualDresser.Runtime
                 ld: (url) => {
                     Debug.Log($"[WebViewBridge] loaded: {url}");
                     _ready = true;
-                    // 로드 완료 알림
+                    // WebView 로드 완료 → 기존 UIDocument 숨김
+                    HideUnityUI();
                     SendToJs("{\"type\":\"unityReady\"}");
                 },
                 transparent: true,         // Unity 씬이 뒤에 비치게
@@ -90,7 +92,7 @@ namespace VirtualDresser.Runtime
                 ua: null,
                 radius: 0,
 #if UNITY_EDITOR
-                separated: false
+                separated: true   // Editor에서 별도 프로세스로 실행 → TriLib 충돌 방지
 #endif
             );
 
@@ -103,6 +105,17 @@ namespace VirtualDresser.Runtime
             _webView.LoadURL(url);
         }
 
+        private void HideUnityUI()
+        {
+            // UIDocument (Unity UI Toolkit) 비활성화
+            var uiDocs = FindObjectsOfType<UnityEngine.UIElements.UIDocument>();
+            foreach (var doc in uiDocs)
+            {
+                doc.enabled = false;
+                Debug.Log($"[WebViewBridge] UIDocument 비활성화: {doc.gameObject.name}");
+            }
+        }
+
         private void UpdateLayout()
         {
             if (_webView == null) return;
@@ -110,12 +123,13 @@ namespace VirtualDresser.Runtime
             int screenW = Screen.width;
             int screenH = Screen.height;
 
-            // 상단 전체 너비, 고정 높이
+            // WebView를 오른쪽 패널 영역에만 배치
+            // → 왼쪽 뷰포트를 WebView가 덮지 않으므로 투명도 문제 없음
             _webView.SetMargins(
-                left:   0,
+                left:   screenW - panelWidth,
                 top:    marginTop,
                 right:  0,
-                bottom: screenH - marginTop - uiHeight
+                bottom: 0
             );
             _webView.SetVisibility(true);
         }
@@ -173,6 +187,31 @@ namespace VirtualDresser.Runtime
 
         // ─── 공개 API (DresserUI에서 호출) ───
 
+        // 임포트 중 WebViewObject 완전 비활성화 (native Update 포함 차단)
+        public void Suspend()
+        {
+            if (_suspended) return;
+            _suspended = true;
+            if (_webView != null)
+            {
+                _webView.SetVisibility(false);
+                _webView.gameObject.SetActive(false);
+                Debug.Log("[WebViewBridge] Suspended (import start)");
+            }
+        }
+
+        public void Resume()
+        {
+            if (!_suspended) return;
+            _suspended = false;
+            if (_webView != null)
+            {
+                _webView.gameObject.SetActive(true);
+                _webView.SetVisibility(true);
+                Debug.Log("[WebViewBridge] Resumed (import done)");
+            }
+        }
+
         public void SendAvatarLoaded(string name, IEnumerable<MeshEntryDto> meshes)
         {
             var meshJson = BuildMeshArrayJson(meshes);
@@ -185,10 +224,10 @@ namespace VirtualDresser.Runtime
             SendToJs($"{{\"type\":\"clothingLoaded\",\"name\":{Q(name)},\"meshes\":{meshJson}}}");
         }
 
-        public void SendImportProgress(float progress)
+        public void SendImportProgress(float progress, string title = "", string step = "")
         {
             var p = progress.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            SendToJs($"{{\"type\":\"importProgress\",\"progress\":{p}}}");
+            SendToJs($"{{\"type\":\"importProgress\",\"progress\":{p},\"title\":{Q(title)},\"step\":{Q(step)}}}");
         }
 
         public void SendExportStatus(string status, string log = "")

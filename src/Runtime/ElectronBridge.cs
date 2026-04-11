@@ -96,13 +96,10 @@ namespace VirtualDresser.Runtime
             if (_ws.State == WebSocketState.Open)
             {
                 Debug.Log("[ElectronBridge] Connected to Electron ws://127.0.0.1:8765");
-                // 연결 직후 상태 전송 (Electron이 나중에 켜진 경우 대비)
                 StartCoroutine(ReceiveLoop());
             }
-            else
-            {
-                Debug.Log("[ElectronBridge] Connection failed, will retry...");
-            }
+            // 연결 실패는 WebView 모드에서 정상 — 로그 생략
+
         }
 
         // ─── 수신 루프 ───
@@ -193,11 +190,10 @@ namespace VirtualDresser.Runtime
             Enqueue($"{{\"type\":\"clothingLoaded\",\"name\":{Q(clothingName)},\"meshes\":{meshJson}}}");
         }
 
-        public void SendImportProgress(float progress)
+        public void SendImportProgress(float progress, string title = "", string step = "")
         {
-            // 0.0 ~ 1.0
             var p = progress.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            Enqueue($"{{\"type\":\"importProgress\",\"progress\":{p}}}");
+            Enqueue($"{{\"type\":\"importProgress\",\"progress\":{p},\"title\":{Q(title)},\"step\":{Q(step)}}}");
         }
 
         public void SendExportStatus(string status, string log = "")
@@ -211,6 +207,9 @@ namespace VirtualDresser.Runtime
             var v = visible ? "true" : "false";
             Enqueue($"{{\"type\":\"meshVisibility\",\"name\":{Q(meshName)},\"visible\":{v}}}");
         }
+
+        // 이미 JSON으로 직렬화된 문자열을 그대로 전송
+        public void SendRaw(string json) => Enqueue(json);
 
         // ─── 내부 유틸 ───
 

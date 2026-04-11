@@ -84,6 +84,10 @@ namespace VirtualDresser.Editor
             if (manager.GetComponent<ElectronBridge>() == null)
                 manager.AddComponent<ElectronBridge>();
 
+            // WebViewBridge (gree/unity-webview React UI 연동)
+            if (manager.GetComponent<WebViewBridge>() == null)
+                manager.AddComponent<WebViewBridge>();
+
             // ── 3. Main Camera ──
             var cam = Camera.main;
             if (cam == null)
