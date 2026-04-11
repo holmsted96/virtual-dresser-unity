@@ -2477,6 +2477,8 @@ namespace VirtualDresser.UI
         {
             var smrs = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             int totalApplied = 0;
+            // 이미 사용된 defaults 키 추적 — 이중 매핑 방지
+            var consumedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var smr in smrs)
             {
@@ -2484,24 +2486,28 @@ namespace VirtualDresser.UI
                 if (mesh == null || mesh.blendShapeCount == 0) continue;
 
                 Dictionary<string, float> bsMap = null;
+                string matchedKey = null;
 
                 // 1단계: 정확 일치
                 foreach (var kv in defaults)
                 {
+                    if (consumedKeys.Contains(kv.Key)) continue;
                     if (string.Equals(kv.Key, smr.gameObject.name, StringComparison.OrdinalIgnoreCase))
-                    { bsMap = kv.Value; break; }
+                    { bsMap = kv.Value; matchedKey = kv.Key; break; }
                 }
 
                 // 2단계: 정규화 부분 일치 ("Body_base" ↔ "body", "Moe_Body" ↔ "Body")
+                // 단, 정확 매칭 가능한 SMR이 다른 곳에 있을 수 있으므로 아직 사용 안 된 키만 대상
                 if (bsMap == null)
                 {
                     var normSmr = NormalizeSmrName(smr.gameObject.name);
                     foreach (var kv in defaults)
                     {
+                        if (consumedKeys.Contains(kv.Key)) continue;
                         var normKey = NormalizeSmrName(kv.Key);
                         if (normSmr == normKey || normSmr.Contains(normKey) || normKey.Contains(normSmr))
                         {
-                            bsMap = kv.Value;
+                            bsMap = kv.Value; matchedKey = kv.Key;
                             Debug.Log($"[DresserUI] AnimClip BS 퍼지매칭: prefab='{kv.Key}' → SMR='{smr.gameObject.name}'");
                             break;
                         }
@@ -2509,6 +2515,7 @@ namespace VirtualDresser.UI
                 }
 
                 if (bsMap == null) continue;
+                consumedKeys.Add(matchedKey); // 동일 key 재사용 방지
 
                 int applied = 0;
                 foreach (var kv in bsMap)
