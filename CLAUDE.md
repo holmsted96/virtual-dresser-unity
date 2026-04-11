@@ -142,6 +142,25 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 
 ## 남은 작업
 
+### 🔴 즉시 — Prefab 데이터 동기화 미완 (블렌드쉐이프 / 셰이프키 / Shrink)
+- 현재 상태: 아바타 로드 시 blendshape 기본값이 prefab 원본과 다르게 로드됨
+  - VRCAvatarDescriptor → FX Layer → AnimatorController → AnimClip 체인으로 기본값 파싱하고 있으나 일부 누락
+  - `shrink` 계열 셰이프키(발, 손가락 등 숨김용) 값이 0으로 초기화되어 body 파츠가 보여야 할 위치에서 뭉개짐
+- 해결 방향:
+  1. `.prefab` YAML에서 `m_BlendShapeWeights` 직접 파싱 (AnimClip 체인보다 신뢰도 높음)
+  2. AnimClip 파싱 결과와 prefab 직접값 중 0이 아닌 값 우선 적용
+  3. `consumedKeys` 이중매핑 방지는 적용됐으나 매칭 자체가 누락되는 SMR 있는지 로그 확인
+
+### 🔴 즉시 — 루미나 텍스처/머티리얼 매핑 깨짐
+- 현재 상태: 루미나(`lumina`) 아바타 임포트 시 텍스처가 잘못 연결되거나 흰색/분홍으로 표시됨
+- 원인 후보:
+  1. `.mat` YAML GUID 역매핑 실패 — lumina 특유의 머티리얼 명명 규칙이 기존 fallback 로직과 불일치
+  2. 텍스처 파일명과 머티리얼명 간 유사도 점수 임계값 미달
+- 해결 방향:
+  1. 루미나 임포트 후 `[MatMgr]` 콘솔 로그에서 "GUID매핑 없음" 항목 수집
+  2. 해당 matchKey vs 실제 맵 키 비교 → `FindMatInfo()` fallback 패턴 보완
+  3. 필요 시 lumina 전용 예외 처리가 아닌 범용 매칭 규칙 개선
+
 ### 🔴 즉시 — e2e 테스트 (미완)
 1. `VirtualDresser > Build Windows` → `c:/vd/build/VirtualDresser.exe` 생성 확인
 2. `VirtualDresser.exe` 실행 → 아바타 임포트 → 텍스처 정상 렌더링 확인
