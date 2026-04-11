@@ -470,9 +470,13 @@ namespace VirtualDresser.Runtime
                                 foreach (var (goName, bsMap) in bsFromClip)
                                 {
                                     if (!merged.TryGetValue(goName, out var target))
-                                        merged[goName] = target = new Dictionary<string, float>(StringComparer.Ordinal);
+                                        merged[goName] = target = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
                                     foreach (var (bs, val) in bsMap)
-                                        target[bs] = val;
+                                    {
+                                        // MAX 집계: 여러 클립이 같은 BS를 설정할 때 가장 큰 값 유지
+                                        if (!target.TryGetValue(bs, out var existing) || val > existing)
+                                            target[bs] = val;
+                                    }
                                 }
                             }
                             if (missingClips > 0)

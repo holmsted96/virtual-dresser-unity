@@ -2533,7 +2533,25 @@ namespace VirtualDresser.UI
                 if (applied > 0)
                 {
                     totalApplied += applied;
-                    Debug.Log($"[DresserUI] AnimClip 기본 BS 적용: {smr.name} {applied}개");
+                    Debug.Log($"[DresserUI] AnimClip 기본 BS 적용: {smr.name} {applied}개 " +
+                              $"({string.Join(", ", bsMap.Select(b => $"{b.Key}={b.Value}"))})");
+                }
+
+                // 진단: Cloth_tights 등 주요 메시의 전체 BS 상태 출력
+                if (smr.name.IndexOf("tights", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    smr.name.IndexOf("cloth", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    var allBs = new System.Text.StringBuilder();
+                    for (int i = 0; i < mesh.blendShapeCount; i++)
+                    {
+                        var w = smr.GetBlendShapeWeight(i);
+                        if (w != 0f)
+                            allBs.Append($"{mesh.GetBlendShapeName(i)}={w}, ");
+                    }
+                    Debug.Log($"[DresserUI] {smr.name} BS적용후 nonzero: {(allBs.Length > 0 ? allBs.ToString() : "(없음)")}");
+                    // 전체 BS 이름 목록도 출력 (진단용)
+                    Debug.Log($"[DresserUI] {smr.name} 전체 BS목록({mesh.blendShapeCount}개): " +
+                              string.Join(", ", Enumerable.Range(0, mesh.blendShapeCount).Select(i => mesh.GetBlendShapeName(i))));
                 }
             }
 
