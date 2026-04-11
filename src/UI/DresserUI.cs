@@ -217,6 +217,14 @@ namespace VirtualDresser.UI
                         HandleFileDrop(hairPath, "hair");
                     }
                     break;
+                case "loadMaterial":
+                    var matPath = ExtractJsonString(json, "path");
+                    if (!string.IsNullOrEmpty(matPath))
+                    {
+                        Debug.Log($"[DresserUI] Electron → loadMaterial: {matPath}");
+                        HandleFileDrop(matPath, "clothing-material");
+                    }
+                    break;
                 case "exportWarudo":
                     Debug.Log("[DresserUI] Electron → exportWarudo");
                     OnBuildButtonClicked();
@@ -694,9 +702,7 @@ namespace VirtualDresser.UI
                 HideLoading();
                 SetParseStatus($"Avatar loaded: {displayName}");
 
-                // Electron React UI에 알림
-                if (ElectronBridge.Instance != null)
-                    ElectronBridge.Instance.SendAvatarLoaded(displayName, GetMeshDtos("avatar"));
+                BridgeSendAvatarLoaded(displayName, GetMeshDtos("avatar"));
             }
             catch (Exception e)
             {
@@ -798,8 +804,7 @@ namespace VirtualDresser.UI
             SetParseStatus($"Clothing loaded: {displayName} ({fbxPaths.Count} FBX)");
 
             // Electron React UI에 알림
-            if (ElectronBridge.Instance != null)
-                ElectronBridge.Instance.SendClothingLoaded(displayName, GetMeshDtos("clothing"));
+            BridgeSendClothingLoaded(displayName, GetMeshDtos("clothing"));
         }
 
         private async void LoadHairFbx(ParseResult result, string displayName)
@@ -907,6 +912,34 @@ namespace VirtualDresser.UI
             RefreshMeshPanel();
             RefreshLayerPanel();
             SwitchTab("layer");
+        }
+
+        // ─── UI 브리지 헬퍼 (ElectronBridge + WebViewBridge 동시 호출) ───
+
+        private void BridgeSendAvatarLoaded(string name, IEnumerable<MeshEntryDto> meshes)
+        {
+            var list = meshes is IList<MeshEntryDto> l ? l : new System.Collections.Generic.List<MeshEntryDto>(meshes);
+            BridgeSendAvatarLoaded(name, list);
+            WebViewBridge.Instance?.SendAvatarLoaded(name, list);
+        }
+
+        private void BridgeSendClothingLoaded(string name, IEnumerable<MeshEntryDto> meshes)
+        {
+            var list = meshes is IList<MeshEntryDto> l ? l : new System.Collections.Generic.List<MeshEntryDto>(meshes);
+            BridgeSendClothingLoaded(name, list);
+            WebViewBridge.Instance?.SendClothingLoaded(name, list);
+        }
+
+        private void BridgeSendImportProgress(float progress)
+        {
+            BridgeSendImportProgress(progress);
+            WebViewBridge.Instance?.SendImportProgress(progress);
+        }
+
+        private void BridgeSendExportStatus(string status, string log = "")
+        {
+            BridgeSendExportStatus(status, log);
+            WebViewBridge.Instance?.SendExportStatus(status, log);
         }
 
         // ─── ElectronBridge 헬퍼 ───
@@ -1373,7 +1406,7 @@ namespace VirtualDresser.UI
             SetParseStatus("⏳ Building .warudo...");
             Debug.Log($"[DresserUI] Warudo 헤들리스 빌드 시작: {outputPath}  (firstRun={isFirstRun})");
 
-            ElectronBridge.Instance?.SendExportStatus("building", "Starting headless build...");
+            BridgeSendExportStatus("building", "Starting headless build...");
 
             WarudoHeadlessBuilder.BuildWarudo(
                 inputPath, outputPath, avatarName,
@@ -1387,13 +1420,13 @@ namespace VirtualDresser.UI
                         {
                             SetParseStatus($"✅ .warudo created!\nSaved to: {outputPath}");
                             Debug.Log($"[DresserUI] 빌드 완료: {result}");
-                            ElectronBridge.Instance?.SendExportStatus("done", outputPath);
+                            BridgeSendExportStatus("done", outputPath);
                         }
                         else
                         {
                             SetParseStatus($"❌ Build failed\n{error}");
                             Debug.LogError($"[DresserUI] 빌드 실패: {error}");
-                            ElectronBridge.Instance?.SendExportStatus("error", error);
+                            BridgeSendExportStatus("error", error);
                         }
                     });
                 },
@@ -1402,7 +1435,7 @@ namespace VirtualDresser.UI
                     UnityMainThreadDispatcher.Enqueue(() =>
                     {
                         ShowLoading("Building .warudo", step, progress);
-                        ElectronBridge.Instance?.SendExportStatus("building", step);
+                        BridgeSendExportStatus("building", step);
                     });
                 });
         }
@@ -2849,13 +2882,15 @@ namespace VirtualDresser.UI
             _progressFill.style.width = new StyleLength(new Length(pct, LengthUnit.Percent));
 
             // Electron React UI에 진행률 전달
-            ElectronBridge.Instance?.SendImportProgress(progress);
+            BridgeSendImportProgress(progress);
         }
 
         private void HideLoading()
         {
             if (_loadingOverlay == null) return;
             _loadingOverlay.style.display = DisplayStyle.None;
+            // Electron UI 게이지 완료 처리 (1.0 → 숨김)
+            BridgeSendImportProgress(1f);
         }
 
         private static string LayerDisplayName(string layerKey) => layerKey switch
