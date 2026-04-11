@@ -114,6 +114,30 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
   - `Assets/Resources/LilToonVariants.shadervariants` — 빌드 시 자동 생성
   - Graphics Settings Preloaded Shaders에 자동 등록
 
+### Sprint G — WebView React UI 전환 ✅
+- `WebViewBridge.cs` — gree/unity-webview 기반 Unity ↔ React 브리지 (오른쪽 340px 패널만 WebView 배치)
+- `ElectronBridge.cs` — 별도 Electron 창 방식 WebSocket 브리지 (feature/electron-ui 브랜치, 현재 보류)
+- React UI (`c:/vd/virtual-dresser-electron/`) — Vite + TypeScript, WebView/Electron/mock 자동 어댑터
+  - White + Blue 디자인 시스템, Nexa 폰트
+  - 메쉬 클릭 → 선택 → `SelectedMeshPanel` (머티리얼 컬러 / 블렌드쉐이프 / 트랜스폼 서브탭)
+  - 머티리얼 컬러 피커 → Unity `setMaterialColor` 연동
+  - 블렌드쉐이프 슬라이더 → Unity `setBlendShape` 연동
+  - 메쉬 visibility 토글, 메쉬 삭제(2-step 확인)
+  - 좌하단 포즈(A-Pose/Arms-Up)/카메라 리셋 OnGUI 오버레이 — White+Blue 테마 + hover 애니메이션
+- **브랜치 구조**:
+  - `main` — WebView MVP (현재 작업 기준)
+  - `feature/electron-ui` — 별도 Electron 창 방식 (보류)
+  - `legacy/unity-ui` — 순수 Unity UI Toolkit 버전 (구버전)
+
+### Sprint H — 글로벌 블렌드쉐이프 패널 + 파싱 버그수정 ✅
+- `SendAllBlendShapes()` — 아바타/의상 로드 완료 시 전체 메쉬 블렌드쉐이프를 React로 전송
+- React `allBlendShapes` 전역 상태 + `BS_GLOBAL` 액션으로 전역/선택 패널 동시 동기화
+- **Meshes | Blend 메인 탭 바** 추가 — 메쉬 선택 없이도 블렌드쉐이프 전체 조작 가능
+  - `GlobalBlendShapesPanel` — 메쉬별 접이식 그룹 + 검색 필터
+  - `GlobalBsRow` — 슬라이더 0~100
+- JSON boolean 파싱 버그 수정: `setMeshVisible`의 `visible` 필드가 quoted string이 아닌 boolean → `json.Contains("\"visible\":true")` 방식으로 수정
+- AnimClip 블렌드쉐이프 이중 매핑 방지: `consumedKeys HashSet` 추가 (여러 SMR이 동일 prefab 키에 매칭 시 중복 적용 차단)
+
 ---
 
 ## 남은 작업
@@ -124,6 +148,13 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 3. 의상 임포트 → 본 바인딩 확인
 4. "Export" 버튼 → `.warudo` 파일 생성 확인
 5. Warudo에서 `.warudo` 로드 테스트
+
+### 🔴 즉시 — Electron 레포 remote 설정
+- `c:/vd/virtual-dresser-electron/` 은 현재 remote 미설정 → GitHub 레포 생성 후 연결 필요
+  ```
+  git remote add origin https://github.com/<계정>/<레포명>.git
+  git push -u origin master
+  ```
 
 ### 🔴 즉시 — 모에 텍스처 매칭 최종 확인
 - 빌드 후 콘솔에서 `[MatMgr]` 로그 확인
@@ -137,9 +168,8 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 
 | 항목 | 설명 | 난이도 |
 |------|------|--------|
-| **Drag & Drop 파일 열기** | .unitypackage를 앱 창에 드래그해서 바로 열기. 현재 버튼 클릭만 가능. Standalone에서는 WinAPI로 구현 필요 | 중 |
+| **Drag & Drop 파일 열기** | .unitypackage를 WebView 패널에 드래그해서 바로 열기. 현재 버튼 클릭만 가능. WebViewBridge에서 WinAPI 파일다이얼로그 연동 필요 | 중 |
 | **카메라 뷰 프리셋** | Front / Side / Top 버튼으로 즉시 시점 전환. 현재는 마우스로만 조작 | 하 |
-| **머티리얼 컬러 오버라이드** | 메시 패널에서 색상 피커로 특정 머티리얼 색상 변경. 아바타 커스터마이징 핵심 기능 | 중 |
 | **메시 목록 검색/필터** | 의상이 많을 때 이름으로 검색. 현재는 스크롤만 가능 | 하 |
 
 ### 🟢 그 다음 — 완성도
@@ -147,7 +177,7 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 | 항목 | 설명 | 난이도 |
 |------|------|--------|
 | **세션 저장/복원** | 마지막으로 로드한 아바타+의상 조합을 앱 재시작 후에도 복원 | 중 |
-| **트랜스폼 Undo/Redo** | `[...]` 패널에서 수치 변경 후 Ctrl+Z 되돌리기 | 중 |
+| **트랜스폼 Undo/Redo** | Transform 패널에서 수치 변경 후 Ctrl+Z 되돌리기 | 중 |
 | **아웃핏 프리셋 저장** | 현재 의상 조합을 이름 붙여 저장하고 불러오기 | 중 |
 | **뷰포트 전체화면 토글** | 오른쪽 패널 숨기고 캐릭터만 전체 화면으로 보기 | 하 |
 | **메시 다중 선택** | 체크박스로 여러 메시 선택 후 일괄 Hide/Delete | 중 |
@@ -156,12 +186,11 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 
 | 항목 | 설명 | 난이도 |
 |------|------|--------|
-| **UI 전반 디자인 고급화** | 컬러 시스템, 아이콘, 패딩, 폰트 크기 등 전반적 완성도. 현재 Unity UI Toolkit 한계로 블러/글로우/그라데이션 불가 | 상 |
-| **UI 렌더링 방식 전환 (장기)** | Warudo는 React + Chromium 임베드 방식으로 CSS 블러/글로우/그라데이션 전부 가능. 동일 품질 원할 시 Unity + Electron/CEF 오버레이 방식으로 전환 필요. 개발 2~3주 예상. 현 MVP 단계에서는 UI Toolkit 유지 | 상 |
-| **Warudo 빌드 진행 상태 UI** | Export 버튼 누른 후 백그라운드에서 돌아가는 vd-warudo-converter 진행상황을 실시간으로 표시. 현재는 아무 피드백 없음. 구현 방향: 헤들리스 Unity 프로세스의 stdout을 읽어 단계별 상태 표시 (SDK 다운로드 중 / 컴파일 중 / 빌드 중 / 완료), 예상 소요 시간 안내, 완료 시 토스트 알림 | 중 |
+| **Warudo 빌드 진행 상태 UI** | Export 버튼 누른 후 헤들리스 Unity 진행상황 실시간 표시 (stdout 파싱 → 단계별 상태, 완료 토스트) | 중 |
 | **임포트 속도 개선** | 병렬 처리 검토, 텍스처 캐시 | 상 |
-| **시나노 발 클리핑** | 단일 바디 메시라 자동 숨김 불가 → 메시 편집(Sprint E)으로 사용자가 직접 조정하도록 안내 추가 | 하 |
+| **시나노 발 클리핑** | 단일 바디 메시라 자동 숨김 불가 → Transform 패널로 사용자가 직접 조정하도록 안내 추가 | 하 |
 | **아바타 썸네일** | 메시 패널 각 항목에 작은 미리보기 이미지 | 상 |
+| **블렌드쉐이프 값 저장** | 블렌드쉐이프 조작 결과를 Export 시 반영 (현재는 뷰어에서만 동작) | 중 |
 
 ---
 
@@ -218,6 +247,16 @@ virtual-dresser-unity/          ← git 레포 (이 폴더)
 - UIDocument가 3D씬을 덮는 문제
 - 해결: `viewer-area`와 `root` 의 `background-color` 제거 (투명)
 - PanelSettings: `clearDepthStencil=false`, `colorClearValue=transparent`
+
+### WebView React UI 브리지 구조
+- WebView 배치: `SetMargins(left: screenW-340)` — 오른쪽 340px만 WebView로 덮음 (뷰포트 투명도 문제 없음)
+- 개발 시 URL: `http://localhost:7000` (Vite dev server), 빌드 시: `StreamingAssets/ui/index.html`
+- JS → Unity: `window.Unity.call(JSON.stringify({type, ...payload}))`
+- Unity → JS: `webViewObject.EvaluateJS("if(window.onUnityMessage)window.onUnityMessage({json})")`
+- React 어댑터 (`makeApi()`): electronAPI → WebView Unity.call → mock 순으로 자동 감지
+- ⚠️ JSON boolean 파싱 주의: `ExtractStringField()` 는 quoted string 전용 → boolean 필드는 `json.Contains("\"field\":true")` 방식 사용
+- React 레포: `c:/vd/virtual-dresser-electron/` (별도 git 레포, remote 미설정)
+  - dev server: `npm run dev` → `http://localhost:7000`
 
 ### Unity 2021.3 런타임 UI Toolkit 제약
 - `FloatField` 없음 → `TextField` + `float.TryParse(InvariantCulture)` 로 대체
